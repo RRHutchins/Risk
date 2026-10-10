@@ -86,3 +86,22 @@ def test_ledger_records_and_totals(tmp_path):
     assert ledger.total_spent_usd() == pytest.approx(0.35)
     assert ledger.run_count() == 2
     assert len(ledger.rows()) == 3
+
+
+def test_ledger_upgrades_stage1_headings(tmp_path):
+    path = tmp_path / "ledger.csv"
+    path.write_text(
+        "timestamp_utc,run_id,mode,step,model,input_tokens,cache_write_tokens,cache_read_tokens,"
+        "output_tokens,estimated_usd,actual_usd,note\n"
+        "2026-10-10 10:00:00,old,live,Extraction,m,1,0,0,1,0.1,0.20,\n")
+    ledger = Ledger(path)
+    ledger.append("new", "live", "Synthesis", "m", actual_usd=0.05)
+    assert path.read_text().splitlines()[0].startswith("Time (UTC),Run ID")
+    assert ledger.total_spent_usd() == pytest.approx(0.25)
+    assert ledger.run_count() == 2
+
+
+def test_ledger_times_shown_in_local_time():
+    from risk_engine.cli import _local_time
+    assert _local_time("2026-10-10 10:00:00")[:11] in {"10 Oct 2026", "09 Oct 2026", "11 Oct 2026"}
+    assert _local_time("garbled") == "garbled UTC"

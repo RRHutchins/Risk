@@ -7,6 +7,7 @@ It reads the taxonomy, scales, checklist and prompts from the pack.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,6 +37,10 @@ class Pack:
     @property
     def accepted_file_types(self) -> list[str]:
         return [s.lower() for s in self.config.get("accepted_file_types", [])]
+
+    @property
+    def heading_patterns(self) -> list[str]:
+        return list((self.config.get("ingest") or {}).get("extra_heading_patterns") or [])
 
     def extraction_context(self) -> str:
         """Everything that is sent unchanged with every extraction call.
@@ -83,6 +88,12 @@ def load_pack(name: str, packs_dir: Path | None = None) -> Pack:
         examples = json.load(f).get("examples", [])
     with open(paths["checklist"], encoding="utf-8") as f:
         checklist = (yaml.safe_load(f) or {}).get("items", [])
+
+    for pattern in (config.get("ingest") or {}).get("extra_heading_patterns") or []:
+        try:
+            re.compile(pattern)
+        except re.error as e:
+            raise ConfigError(f"Pack '{name}' has a heading pattern that is not valid: {pattern} ({e})")
 
     codes = {t["code"] for t in config["taxonomy"]}
     for item in checklist:

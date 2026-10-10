@@ -11,8 +11,9 @@ default_pack: construction_tender
 
 # ---------------------------------------------------------------------
 #  Claude models
-#  Model names are checked against https://docs.claude.com before use.
-#  Change them here; never in the code.
+#  All three names were checked against Anthropic's model list
+#  (https://platform.claude.com/docs/en/about-claude/models/overview)
+#  on 10 October 2026. Change them here; never in the code.
 # ---------------------------------------------------------------------
 models:
   extraction: claude-sonnet-5-5      # reads each document section
@@ -23,7 +24,8 @@ models:
 # ---------------------------------------------------------------------
 #  Prices in US dollars per 1 million tokens (a token is roughly 4
 #  characters of English text). Taken from Anthropic's published list
-#  prices, October 2026. Update if Anthropic changes its prices.
+#  prices (https://platform.claude.com/docs/en/about-claude/pricing),
+#  checked 10 October 2026. Update if Anthropic changes its prices.
 # ---------------------------------------------------------------------
 pricing:
   claude-opus-5-5:
@@ -33,7 +35,10 @@ pricing:
   claude-sonnet-5-5:
     input: 2.00
     output: 10.00
-    cache_read: 0.20
+    cache_read: 0.10
+  # Haiku prices below apply to prompts up to 100,000 tokens. Longer prompts
+  # cost 5 times as much. This tool sends much smaller pieces, so the lower
+  # prices apply.
   claude-haiku-5-5:
     input: 0.10
     output: 0.50
@@ -53,6 +58,13 @@ budget:
   total_budget_usd: 100.00
   # The running record of all spending (a spreadsheet-readable CSV file).
   ledger_file: ledger/spend_ledger.csv
+
+# ---------------------------------------------------------------------
+#  Reading documents
+# ---------------------------------------------------------------------
+ingest:
+  # Spreadsheets are split into blocks of this many rows.
+  excel_rows_per_section: 50
 
 # ---------------------------------------------------------------------
 #  Cost estimate assumptions (used before a run starts, and in dry runs)

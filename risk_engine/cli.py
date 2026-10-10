@@ -1,6 +1,7 @@
 """Command-line interface.
 
     python -m risk_engine check              check the installation
+    python -m risk_engine ingest FOLDER      read and split documents, list the sections
     python -m risk_engine dry-run FOLDER     read documents and estimate cost (no API calls)
     python -m risk_engine ledger             show spending to date
 """
@@ -9,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from risk_engine.config import ConfigError, api_key_present, load_settings, resolve_path
@@ -52,18 +54,14 @@ def cmd_check(args, settings) -> int:
     return 0 if ok else 1
 
 
-def cmd_dry_run(args, settings) -> int:
-    from risk_engine.dryrun import dry_run
+def _folder_ok(folder: Path) -> bool:
+    if folder.is_dir():
+        return True
+    print(f"Folder not found: {folder}\nCheck the spelling, or drag the folder into this window to paste its path.")
+    return False
 
-    folder = Path(args.folder)
-    if not folder.is_dir():
-        print(f"Folder not found: {folder}\nCheck the spelling, or drag the folder into this window to paste its path.")
-        return 1
-    r = dry_run(folder, settings, pack_name=args.pack, batch=args.batch)
 
-    print(LINE)
-    print("DRY RUN - no data was sent anywhere and nothing was spent")
-    print(LINE)
+def _print_documents(r: dict, show_sections: bool = False) -> None:
     print(f"Folder:      {r['folder']}")
     print(f"Domain pack: {r['pack']}")
     print(f"\nDocuments read: {len(r['documents'])}")
@@ -71,12 +69,48 @@ def cmd_dry_run(args, settings) -> int:
         print(f"  - {d['name']} ({d['type']}, {len(d['sections'])} section(s), about {d['tokens']:,} tokens)")
         for w in d["warnings"]:
             print(f"      WARNING: {w}")
+        for n in d["notes"]:
+            print(f"      Note: {n}")
+        if show_sections:
+            for i, sec in enumerate(d["sections"], start=1):
+                print(f"        {i:>3}. {sec['ref']}")
     if r["skipped_files"]:
         print("\nFiles not read:")
         for s in r["skipped_files"]:
-            print(f"  - {s}")
+            print(f"  - {s['name']}: {s['reason']}.")
     if not r["documents"]:
-        print("\nNo readable documents were found, so there is nothing to estimate.")
+        print("\nNo readable documents were found.")
+
+
+def cmd_ingest(args, settings) -> int:
+    from risk_engine.dryrun import ingest_only
+
+    folder = Path(args.folder)
+    if not _folder_ok(folder):
+        return 1
+    r = ingest_only(folder, settings, pack_name=args.pack)
+    print(LINE)
+    print("READING DOCUMENTS - no data was sent anywhere and nothing was spent")
+    print(LINE)
+    _print_documents(r, show_sections=True)
+    print(f"\nSections listed in Excel: {r['sections_file']}")
+    print(f"Audit file saved:         {r['audit_file']}")
+    print(LINE)
+    return 0
+
+
+def cmd_dry_run(args, settings) -> int:
+    from risk_engine.dryrun import dry_run
+
+    folder = Path(args.folder)
+    if not _folder_ok(folder):
+        return 1
+    r = dry_run(folder, settings, pack_name=args.pack, batch=args.batch)
+
+    print(LINE)
+    print("DRY RUN - no data was sent anywhere and nothing was spent")
+    print(LINE)
+    _print_documents(r)
 
     t = r["tokens"]
     print(f"\nText to review: about {t['document_text']:,} tokens in {len(r['chunks'])} piece(s)")
@@ -90,8 +124,9 @@ def cmd_dry_run(args, settings) -> int:
     print(f"  {'ESTIMATED TOTAL':<45}   ${e['total_usd']:.4f}")
     print(f"\nPer-run cap: ${r['per_run_cap_usd']:.2f}  ->  "
           + ("within the cap." if r["within_cap"] else "OVER THE CAP. A real run would be stopped."))
-    print(f"\nAudit file saved: {r['audit_file']}")
-    print(f"Ledger updated:   {r['ledger_file']}")
+    print(f"\nSections listed in Excel: {r['sections_file']}")
+    print(f"Audit file saved:         {r['audit_file']}")
+    print(f"Ledger updated:           {r['ledger_file']}")
     print(LINE)
     return 0
 
@@ -110,12 +145,21 @@ def cmd_ledger(args, settings) -> int:
     print(f"Remaining:          ${budget - spent:.4f}")
     rows = ledger.rows()[-10:]
     if rows:
-        print("\nMost recent entries:")
+        print("\nMost recent entries (times are your computer's local time):")
         for row in rows:
-            print(f"  {row['timestamp_utc']}  {row['mode']:<8} {row['step']:<15} "
+            print(f"  {_local_time(row['time_utc'])}  {row['mode']:<8} {row['step']:<15} "
                   f"est ${float(row['estimated_usd']):.4f}  actual ${float(row['actual_usd']):.4f}")
+        print("\n(The ledger file itself records times in UTC, so it reads the same anywhere.)")
     print(LINE)
     return 0
+
+
+def _local_time(utc_text: str) -> str:
+    try:
+        t = datetime.strptime(utc_text, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return t.astimezone().strftime("%d %b %Y %H:%M")
+    except ValueError:
+        return f"{utc_text} UTC"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -124,6 +168,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("check", help="check the installation")
+
+    i = sub.add_parser("ingest", help="read and split documents, and list the sections")
+    i.add_argument("folder", help="folder containing the documents")
+    i.add_argument("--pack", help="domain pack to use (default from settings)")
 
     d = sub.add_parser("dry-run", help="read documents and estimate cost, without calling the API")
     d.add_argument("folder", help="folder containing the tender documents")
@@ -138,7 +186,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         settings = load_settings(args.settings)
-        return {"check": cmd_check, "dry-run": cmd_dry_run, "ledger": cmd_ledger}[args.command](args, settings)
+        return {"check": cmd_check, "ingest": cmd_ingest, "dry-run": cmd_dry_run,
+                "ledger": cmd_ledger}[args.command](args, settings)
     except ConfigError as e:
         print(f"Setup problem: {e}")
         return 1

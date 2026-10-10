@@ -179,26 +179,49 @@ class CostGuard:
 # Ledger: a CSV file recording every run and every dollar spent
 # ---------------------------------------------------------------------------
 
-LEDGER_COLUMNS = [
-    "timestamp_utc", "run_id", "mode", "step", "model",
+# Internal names (used by the code) and the column headings written to the file.
+LEDGER_FIELDS = [
+    "time_utc", "run_id", "mode", "step", "model",
     "input_tokens", "cache_write_tokens", "cache_read_tokens", "output_tokens",
     "estimated_usd", "actual_usd", "note",
+]
+LEDGER_HEADINGS = [
+    "Time (UTC)", "Run ID", "Mode", "Step", "Model",
+    "Input tokens", "Cache write tokens", "Cache read tokens", "Output tokens",
+    "Estimated cost (USD)", "Actual cost (USD)", "Note",
 ]
 
 
 class Ledger:
+    """A CSV file (opens in Excel) with one line per step of every run.
+
+    Times are recorded in UTC so the file reads the same on any computer.
+    """
+
     def __init__(self, path: Path):
         self.path = Path(path)
+
+    def _upgrade_headings(self) -> None:
+        """Ledgers from Stage 1 used technical column names; rename them."""
+        if not self.path.exists():
+            return
+        with open(self.path, newline="", encoding="utf-8") as f:
+            lines = list(csv.reader(f))
+        if lines and lines[0] != LEDGER_HEADINGS and len(lines[0]) == len(LEDGER_HEADINGS):
+            lines[0] = LEDGER_HEADINGS
+            with open(self.path, "w", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerows(lines)
 
     def append(self, run_id: str, mode: str, step: str, model: str = "", usage: Usage | None = None,
                estimated_usd: float = 0.0, actual_usd: float = 0.0, note: str = "") -> None:
         usage = usage or Usage()
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._upgrade_headings()
         new_file = not self.path.exists()
         with open(self.path, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             if new_file:
-                writer.writerow(LEDGER_COLUMNS)
+                writer.writerow(LEDGER_HEADINGS)
             writer.writerow([
                 datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), run_id, mode, step, model,
                 usage.input, usage.cache_write, usage.cache_read, usage.output,
@@ -206,10 +229,13 @@ class Ledger:
             ])
 
     def rows(self) -> list[dict]:
+        """All entries, keyed by the internal field names."""
         if not self.path.exists():
             return []
         with open(self.path, newline="", encoding="utf-8") as f:
-            return list(csv.DictReader(f))
+            reader = csv.reader(f)
+            next(reader, None)  # headings
+            return [dict(zip(LEDGER_FIELDS, line)) for line in reader if line]
 
     def total_spent_usd(self) -> float:
         return sum(float(r["actual_usd"] or 0) for r in self.rows())

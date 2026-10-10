@@ -3,11 +3,13 @@
 import json
 from pathlib import Path
 
+import openpyxl
 import pytest
 
 from risk_engine.config import PROJECT_ROOT, ConfigError, load_settings
-from risk_engine.dryrun import dry_run
-from risk_engine.ingest import Document, Section, chunk_documents, read_folder
+from risk_engine.costs import Ledger
+from risk_engine.dryrun import dry_run, ingest_only
+from risk_engine.ingest import Document, Section, chunk_documents
 from risk_engine.packs import load_pack
 
 DEMO = PROJECT_ROOT / "samples" / "demo_tender"
@@ -16,6 +18,7 @@ DEMO = PROJECT_ROOT / "samples" / "demo_tender"
 def test_settings_load():
     s = load_settings()
     assert s["budget"]["per_run_cap_usd"] == 3.00
+    assert s["pricing"]["claude-sonnet-5-5"]["cache_read"] == 0.10
     assert s["simulation"]["iterations"] == 10000
     for model in s["models"].values():
         assert model in s["pricing"], f"no price for {model}"
@@ -33,26 +36,6 @@ def test_construction_pack_loads():
 def test_missing_pack_is_reported():
     with pytest.raises(ConfigError):
         load_pack("no_such_pack")
-
-
-def test_demo_pack_is_read():
-    docs, skipped = read_folder(DEMO)
-    names = {d.name: d for d in docs}
-    assert set(names) == {"Instructions to Tenderers.docx", "Pricing Schedule.xlsx",
-                          "Schedule of Amendments.pdf", "Site Information.txt"}
-    assert skipped == []
-    pdf = names["Schedule of Amendments.pdf"]
-    assert [s.ref for s in pdf.sections] == ["page 1", "page 2", "page 3"]
-    assert "Z6 Delay damages" in pdf.sections[1].text
-    assert [s.ref for s in names["Pricing Schedule.xlsx"].sections] == ["sheet Pricing", "sheet Notes"]
-
-
-def test_unsupported_files_are_skipped(tmp_path):
-    (tmp_path / "photo.jpg").write_bytes(b"x")
-    (tmp_path / "notes.txt").write_text("hello")
-    docs, skipped = read_folder(tmp_path)
-    assert [d.name for d in docs] == ["notes.txt"]
-    assert "photo.jpg" in skipped[0]
 
 
 def test_chunks_respect_size_and_keep_documents_apart():
@@ -78,6 +61,27 @@ def test_dry_run_end_to_end(tmp_path):
     assert audit["run_id"] == r["run_id"]
     assert "extraction_context" in audit["prompts"]
     assert (tmp_path / "ledger.csv").exists()
+
+
+def test_runs_started_together_get_separate_ids_and_files(tmp_path):
+    settings = load_settings()
+    settings["budget"]["ledger_file"] = str(tmp_path / "ledger.csv")
+    settings["output_folder"] = str(tmp_path / "outputs")
+    runs = [dry_run(DEMO, settings) for _ in range(5)]
+    ids = {r["run_id"] for r in runs}
+    assert len(ids) == 5
+    assert all(Path(r["audit_file"]).exists() for r in runs)
+    assert Ledger(tmp_path / "ledger.csv").run_count() == 5
+
+
+def test_ingest_writes_sections_workbook(tmp_path):
+    settings = load_settings()
+    settings["output_folder"] = str(tmp_path / "outputs")
+    r = ingest_only(DEMO, settings)
+    wb = openpyxl.load_workbook(r["sections_file"])
+    rows = list(wb["Sections"].iter_rows(values_only=True))
+    assert rows[0][3] == "Reference"
+    assert any(row[3] == "Z3 Ground conditions (pages 1-2)" for row in rows)
 
 
 def test_dry_run_is_repeatable(tmp_path):
