@@ -1,0 +1,7 @@
+# Libraries the tool needs. Installed with:  pip install -r requirements.txt
+anthropic>=0.70        # talks to the Claude API (used from Stage 3)
+PyYAML>=6.0            # reads the settings and domain pack files
+pypdf>=4.0             # reads PDF files
+python-docx>=1.1       # reads Word files (and writes the report later)
+openpyxl>=3.1          # reads Excel files (and writes the register later)
+pytest>=8.0            # runs the automatic checks

@@ -1,0 +1,95 @@
+# =====================================================================
+#  Tender Risk Reviewer - main settings
+#
+#  This is the ONLY file you need to edit to change how the tool behaves.
+#  Lines starting with # are comments and are ignored by the tool.
+#  Keep the indentation (spaces at the start of lines) exactly as it is.
+# =====================================================================
+
+# Which domain pack to use by default (a folder name inside "packs/").
+default_pack: construction_tender
+
+# ---------------------------------------------------------------------
+#  Claude models
+#  Model names are checked against https://docs.claude.com before use.
+#  Change them here; never in the code.
+# ---------------------------------------------------------------------
+models:
+  extraction: claude-sonnet-5-5      # reads each document section
+  classification: claude-sonnet-5-5  # maps findings to the taxonomy
+  synthesis: claude-opus-5-5         # writes the narrative and summary
+  high_volume: claude-haiku-5-5      # reserved for very large jobs
+
+# ---------------------------------------------------------------------
+#  Prices in US dollars per 1 million tokens (a token is roughly 4
+#  characters of English text). Taken from Anthropic's published list
+#  prices, October 2026. Update if Anthropic changes its prices.
+# ---------------------------------------------------------------------
+pricing:
+  claude-opus-5-5:
+    input: 4.00
+    output: 20.00
+    cache_read: 0.20
+  claude-sonnet-5-5:
+    input: 2.00
+    output: 10.00
+    cache_read: 0.20
+  claude-haiku-5-5:
+    input: 0.10
+    output: 0.50
+    cache_read: 0.01
+  # Writing to the prompt cache costs this multiple of the normal input price.
+  cache_write_multiplier: 1.25
+  # Batch mode (unattended runs) costs this fraction of the normal price.
+  batch_discount: 0.50
+
+# ---------------------------------------------------------------------
+#  Spending controls
+# ---------------------------------------------------------------------
+budget:
+  # Hard stop: a single run is halted if it would spend more than this.
+  per_run_cap_usd: 3.00
+  # Your total API budget for building and testing the tool.
+  total_budget_usd: 100.00
+  # The running record of all spending (a spreadsheet-readable CSV file).
+  ledger_file: ledger/spend_ledger.csv
+
+# ---------------------------------------------------------------------
+#  Cost estimate assumptions (used before a run starts, and in dry runs)
+#  Estimates deliberately err on the high side.
+# ---------------------------------------------------------------------
+estimate:
+  # Characters per token, used to count tokens without calling the API.
+  chars_per_token: 3.5
+  # Add this safety margin to every estimate (0.25 = 25% extra).
+  safety_margin: 0.25
+  # Largest piece of document sent to Claude in one go, in tokens.
+  max_chunk_tokens: 6000
+  # Expected answer length from the extraction step, per chunk.
+  extraction_output_tokens_per_chunk: 2500
+  # Classification step: expected records per chunk, and tokens per record.
+  records_per_chunk: 6
+  classification_input_tokens_per_record: 300
+  classification_output_tokens_per_record: 100
+  # Synthesis step: one call at the end.
+  synthesis_input_tokens: 25000
+  synthesis_output_tokens: 6000
+
+# ---------------------------------------------------------------------
+#  Monte Carlo simulation (used from Stage 4)
+# ---------------------------------------------------------------------
+simulation:
+  iterations: 10000
+  seed: 20261010           # fixed so the same inputs always give the same numbers
+  distribution: pert        # pert or triangular
+  correlation_in_group: 0.5 # how strongly risks in the same group move together
+  percentiles: [10, 50, 80, 90]
+
+# ---------------------------------------------------------------------
+#  Where results are saved
+# ---------------------------------------------------------------------
+output_folder: outputs
+
+# The name of the environment variable holding your Claude API key.
+# The key itself must NEVER be written in this file.
+api_key_env_var: ANTHROPIC_API_KEY

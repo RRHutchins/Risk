@@ -1,0 +1,16 @@
+# Python clutter
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Secrets - never commit these
+.env
+*.key
+
+# Run outputs and the spending ledger stay on your own computer
+outputs/*
+!outputs/.gitkeep
+ledger/*
+!ledger/.gitkeep

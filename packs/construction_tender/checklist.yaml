@@ -1,0 +1,37 @@
+# =====================================================================
+#  Checklist: items the extraction step must ALWAYS report on,
+#  even if the answer is "not found in the documents".
+#  Add, remove, or reword items freely. Keep each "id" unique.
+# =====================================================================
+
+items:
+  - id: liability_cap
+    question: Is liability capped? At what amount?
+    category: LIA
+  - id: ld_rate_cap
+    question: "Liquidated damages: what is the rate and is there a cap?"
+    category: LAD
+  - id: payment_retention
+    question: What is the payment period in days, and the retention percentage?
+    category: PAY
+  - id: time_bar
+    question: Is there any time-bar on claims, and how long is it?
+    category: TIM
+  - id: fitness_for_purpose
+    question: Is there a fitness-for-purpose obligation?
+    category: DES
+  - id: ground_conditions
+    question: Who bears the risk of unforeseen ground conditions?
+    category: GRD
+  - id: fixed_price_inflation
+    question: Is the price fixed? Is there any inflation mechanism?
+    category: PRI
+  - id: bonds_guarantees
+    question: What bonds and guarantees are required?
+    category: INS
+  - id: termination_convenience
+    question: Can the employer terminate for convenience?
+    category: TER
+  - id: order_of_precedence
+    question: Is there an order of precedence between the documents?
+    category: SCO

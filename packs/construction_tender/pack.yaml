@@ -1,0 +1,178 @@
+# =====================================================================
+#  Domain pack: Construction tender
+#
+#  Everything specific to construction tenders lives in this folder.
+#  The engine reads it; nothing here is built into the engine code.
+#  Edit these values to change categories, scales, or thresholds.
+# =====================================================================
+
+name: construction_tender
+title: Construction tender risk review
+version: "0.1"
+description: >
+  Reviews a UK construction tender pack from the bidder's side and
+  identifies threats and opportunities the bidder would take on.
+
+# Who the risks are assessed for, and against what.
+perspective: the bidding contractor or subcontractor
+objectives:
+  - Deliver the works profitably at the tendered price
+  - Complete on time without delay damages
+  - Maintain healthy cashflow
+  - Avoid uncapped or uninsurable liabilities
+
+# How impacts are expressed. The user enters the base value at run time.
+impact_basis:
+  measure: share of contract value
+  base_value_label: Contract value (GBP)
+  currency: GBP
+
+# File types this pack expects to receive.
+accepted_file_types: [".pdf", ".docx", ".xlsx", ".xlsm", ".txt", ".md"]
+
+# ---------------------------------------------------------------------
+#  Taxonomy (risk categories)
+# ---------------------------------------------------------------------
+taxonomy:
+  - code: LIA
+    category: Liability and indemnity
+    typical: Uncapped liability, wide indemnities, consequential loss
+  - code: LAD
+    category: Delay damages
+    typical: Liquidated damages rate, cap, sectional completion
+  - code: PAY
+    category: Payment and cashflow
+    typical: Payment period, retention, pay-less mechanics, set-off
+  - code: TIM
+    category: Programme and time
+    typical: Completion dates, time bars, notice periods, float ownership
+  - code: DES
+    category: Design responsibility
+    typical: Fitness for purpose, design liability, novation of designers
+  - code: GRD
+    category: Ground and site
+    typical: Unforeseen conditions, surveys relied on, access, existing services
+  - code: SCO
+    category: Scope and specification
+    typical: Ambiguity, gaps, conflicts between documents
+  - code: VAR
+    category: Change and variations
+    typical: Valuation rules, instruction process, omitted work
+  - code: TER
+    category: Termination
+    typical: Convenience termination, step-in, compensation on termination
+  - code: INS
+    category: Insurance and security
+    typical: Bonds, parent company guarantee, insurance levels
+  - code: PRI
+    category: Price risk
+    typical: Fixed price, inflation, provisional sums, currency
+  - code: SUB
+    category: Supply chain
+    typical: Flow-down gaps, nominated subcontractors, long-lead items
+  - code: HSE
+    category: Health, safety, environment
+    typical: CDM duties, hazardous materials, environmental constraints
+  - code: CON
+    category: Consents and third parties
+    typical: Planning, permits, neighbours, utilities
+  - code: EMP
+    category: Employer
+    typical: Ability to pay, decision-making, track record
+  - code: TEN
+    category: Tender process
+    typical: Time to bid, clarification limits, evaluation criteria
+
+# ---------------------------------------------------------------------
+#  Likelihood scale
+#  "midpoint" is the probability used in the simulation.
+#  These are starting defaults, not industry standards.
+# ---------------------------------------------------------------------
+likelihood_scale:
+  - score: 1
+    label: Rare
+    band: under 5%
+    midpoint: 0.03
+  - score: 2
+    label: Unlikely
+    band: 5 to 15%
+    midpoint: 0.10
+  - score: 3
+    label: Possible
+    band: 15 to 35%
+    midpoint: 0.25
+  - score: 4
+    label: Likely
+    band: 35 to 60%
+    midpoint: 0.45
+  - score: 5
+    label: Almost certain
+    band: over 60%
+    midpoint: 0.75
+
+# ---------------------------------------------------------------------
+#  Impact scale (as a percentage of contract value)
+#  "upper_pct" is the top of each band; the last band has no top.
+# ---------------------------------------------------------------------
+impact_scale:
+  - score: 1
+    label: Minor
+    band: under 0.5%
+    upper_pct: 0.5
+  - score: 2
+    label: Moderate
+    band: 0.5 to 1%
+    upper_pct: 1.0
+  - score: 3
+    label: Significant
+    band: 1 to 3%
+    upper_pct: 3.0
+  - score: 4
+    label: Major
+    band: 3 to 7%
+    upper_pct: 7.0
+  - score: 5
+    label: Severe
+    band: over 7%
+    upper_pct: null
+
+# ---------------------------------------------------------------------
+#  Rating: score = likelihood x impact
+# ---------------------------------------------------------------------
+rating:
+  red_min: 15      # 15 and above is red
+  amber_min: 8     # 8 to 14 is amber; below 8 is green
+  colours:
+    red: "FF4B4B"
+    amber: "FFC000"
+    green: "70AD47"
+  # Findings carrying any of these flags are red whatever their score.
+  always_red_flags:
+    - uncapped_liability
+    - uncapped_delay_damages
+
+# Allowed responses to a risk.
+responses: [qualify, price, insure, transfer, clarify, accept, decline]
+
+# ---------------------------------------------------------------------
+#  Standard forms: recognised by name only. The copyrighted text of
+#  these forms is never stored here. Review concentrates on amendments.
+# ---------------------------------------------------------------------
+standard_forms:
+  - name: NEC4
+    amendment_markers: ["Z clause", "Option Z", "Z1", "Z2", "Z3"]
+  - name: NEC3
+    amendment_markers: ["Z clause", "Option Z"]
+  - name: JCT
+    amendment_markers: ["Schedule of Amendments", "amendments to the JCT"]
+  - name: FIDIC
+    amendment_markers: ["Particular Conditions", "Part B"]
+  - name: ICC
+    amendment_markers: ["Schedule of Amendments"]
+
+# Files the engine reads from this folder.
+files:
+  extract_prompt: extract_prompt.md
+  synth_prompt: synth_prompt.md
+  examples: examples.json
+  checklist: checklist.yaml
