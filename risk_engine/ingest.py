@@ -37,18 +37,36 @@ IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".heic"
 DRAWING_TYPES = {".dwg", ".dxf", ".dgn", ".ifc", ".rvt"}
 
 # Headings recognised in any domain. Each pattern matches only the label
-# ("4.2", "Clause 7", "Schedule 3") at the start of a line.
+# ("4.2", "Clause 7", "Schedule 3") at the start of a line. Word labels must be
+# capitalised: a line starting "clause 4.2 of ..." is a sentence, not a heading.
+_HEADING_WORDS = ["Clause", "Section", "Part", "Schedule", "Appendix", "Annex", "Annexure",
+                  "Article", "Chapter"]
 DEFAULT_HEADING_PATTERNS = [
-    r"(?i:clause|section|part|schedule|appendix|annex|annexure|article|chapter)\s+[A-Z0-9]+(?:\.[0-9]+)*(?=[\s.:)\-]|$)",
-    r"\d{1,3}(?:\.\d{1,3}){0,4}\.?(?=\s+[A-Z(\"'])",
+    "(?:" + "|".join(w + "|" + w.upper() for w in _HEADING_WORDS) + r")\s+[A-Z0-9]+(?:\.[0-9]+)*(?=[\s.:)\-–]|$)",
+    r"\d{1,3}(?:\.\d{1,3}){0,4}\.?(?=\s+[A-Z(\"'‘“])",
+    r"\d{1,3}(?:\.\d{1,3}){2,4}\.?(?=\s+[a-z])",   # "12.5.1 on insolvency" (never a decimal)
 ]
-# A line like "10 December 2026" or "64 Nr piles" is not a heading.
+# A line like "10 December 2026" or "30 Working Days" is not a heading.
 NOT_HEADING_WORDS = {
     "january", "february", "march", "april", "may", "june", "july", "august", "september",
     "october", "november", "december", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep",
-    "sept", "oct", "nov", "dec", "no", "nr", "nos", "item", "items", "sum", "days", "weeks",
-    "months", "years", "working", "calendar", "business", "per",
+    "sept", "oct", "nov", "dec", "item", "items", "sum", "days", "weeks", "months", "years",
+    "working", "calendar", "business", "per", "hours", "minutes",
 }
+# Quantity abbreviations ("64 Nr piles", "2 No. pumps"). Exact spelling, so that
+# "26. NO PARTNERSHIP" is still a heading.
+QUANTITY_WORDS = {"Nr", "Nr.", "nr", "nr.", "No.", "no.", "Nos", "Nos.", "nos", "nos."}
+# If the previous line ends with one of these words, the next line continues
+# the sentence ("... in accordance with / Clause 4.2"), so it is not a heading.
+JOINING_WORDS = {
+    "a", "an", "and", "as", "at", "by", "clause", "clauses", "for", "from", "in", "of", "on",
+    "or", "paragraph", "paragraphs", "part", "per", "pursuant", "schedule", "section",
+    "sections", "than", "the", "this", "that", "to", "under", "with", "within", "see",
+    "appendix", "annex", "article", "is", "are", "be", "shall", "will", "which",
+}
+# Words that mark a title as a top-level part of a document, such as a schedule.
+TOP_LEVEL_WORDS = re.compile(r"^(schedule|appendix|annex|annexure)\b", re.IGNORECASE)
+NUMBERED = re.compile(r"\d+(?:\.\d+)*")
 
 
 class FileReadError(Exception):
@@ -118,24 +136,118 @@ class HeadingDetector:
         patterns = list(extra_patterns or []) + DEFAULT_HEADING_PATTERNS
         self._regexes = [re.compile(r"^\s*(" + p + r")") for p in patterns]
 
-    def match(self, line: str) -> str | None:
-        """Return the clause label if the line starts a new clause, else None."""
+    def match(self, line: str, previous: str | None = None) -> str | None:
+        """Return the clause label if the line starts a new clause, else None.
+
+        previous is the line before, used to spot a sentence that runs on.
+        """
+        all_capitals = not re.search(r"[a-z]", line)   # "SCHEDULE 1", "3. PAYMENT"
+        if previous and not all_capitals:
+            if _ends_mid_sentence(previous):
+                return None
         for rx in self._regexes:
             m = rx.match(line)
             if not m:
                 continue
             label = m.group(1).strip().rstrip(".")
             rest = line[m.end():].strip()
-            first_word = re.split(r"[\s,.;:]+", rest, maxsplit=1)[0].lower() if rest else ""
-            if first_word in NOT_HEADING_WORDS:
+            first = re.split(r"[\s,;:]+", rest, maxsplit=1)[0] if rest else ""
+            if first in QUANTITY_WORDS or first.lower().rstrip(".") in NOT_HEADING_WORDS:
                 return None
             return label
         return None
 
 
-# ---------------------------------------------------------------------------
-# Building sections from labelled lines
-# ---------------------------------------------------------------------------
+def _ends_mid_sentence(text: str) -> bool:
+    """True if a line stops part-way through a sentence ("... in accordance with")."""
+    stripped = text.rstrip()
+    if stripped.endswith((".", ":", ";", ":-")) or re.search(r"[;,]\s*(and|or)$", stripped):
+        return False
+    tokens = re.findall(r"[a-z]+|\d+", stripped.lower())
+    return bool(tokens) and tokens[-1] in JOINING_WORDS
+
+
+@dataclass
+class _Line:
+    text: str
+    location: str | None = None
+    page_tail: bool = False       # one of the last lines on a PDF page
+    forced_heading: bool = False  # e.g. a Word paragraph styled as a heading
+    label: str | None = None      # set by _plan_headings
+    heading: bool = False         # set by _plan_headings
+    contents_start: bool = False  # set by _plan_headings
+    after_contents: bool = False  # set by _plan_headings
+
+
+def _plan_headings(lines: list[_Line], detector: HeadingDetector | None) -> None:
+    """Decide which lines start a new section. Works on the whole document at
+    once, so it can recognise footnotes, repeated stamps and contents lists."""
+    lines[:] = [l for l in lines if l.text.strip()]
+    if detector is None:
+        return
+    previous = None
+    for l in lines:
+        l.text = l.text.strip()
+        l.label = detector.match(l.text, previous)
+        l.heading = l.forced_heading or l.label is not None
+        previous = l.text
+
+    # Stamps: the same "heading" four or more times is not a heading.
+    counts = Counter(l.text for l in lines if l.heading and not l.forced_heading)
+    for l in lines:
+        if l.heading and not l.forced_heading and counts[l.text] >= 4:
+            l.heading, l.label = False, None
+
+    # Contents lists: four or more short headings close together, which either
+    # end in page numbers or reappear later as real headings.
+    heads = [i for i, l in enumerate(lines) if l.heading]
+    run: list[int] = []
+
+    def close_run():
+        if len(run) >= 4 and sum(len(lines[i].text) <= 100 for i in run) >= 4 and _is_contents(run, lines):
+            for i in range(run[0], run[-1] + 1):
+                lines[i].heading, lines[i].label = False, None
+            lines[run[0]].heading = lines[run[0]].contents_start = True
+            # The contents list ends with its last entry (plus any wrapped line).
+            end = run[-1] + 1
+            if end < len(lines) and not lines[end].heading and re.search(r"\s\d{1,3}\s*$", lines[end].text):
+                end += 1
+            if end < len(lines) and not lines[end].heading:
+                lines[end].heading = lines[end].after_contents = True
+
+    for i in heads:
+        repeats_label = lines[i].label is not None and lines[i].label in {lines[j].label for j in run}
+        if run and (i - run[-1] > 2 or repeats_label):
+            close_run()
+            run = []
+        run.append(i)
+    close_run()
+
+    # Footnotes: "1 Zero Carbon Harrogate | ..." among the last lines of a page.
+    for l in lines:
+        if (l.heading and not l.contents_start and not l.after_contents and not l.forced_heading and l.page_tail and l.label
+                and re.fullmatch(r"\d{1,3}", l.label) and not re.match(r"\d{1,3}\.", l.text)):
+            l.heading, l.label = False, None
+
+
+def _is_contents(run: list[int], lines: list[_Line]) -> bool:
+    ending_in_number = sum(1 for i in run if re.search(r"[A-Za-z][^\d]*[\s.]\d{1,3}\s*$", _after_label(lines[i])))
+    later = {(l.label, _first_word(l.text)) for l in lines[run[-1] + 1:] if l.heading}
+    reappearing = sum(1 for i in run if (lines[i].label, _first_word(lines[i].text)) in later)
+    return ending_in_number * 2 >= len(run) or reappearing * 2 >= len(run)
+
+
+def _after_label(line: _Line) -> str:
+    """The entry text after its clause label: '1 DEFINITIONS 4' -> ' DEFINITIONS 4'."""
+    if line.label and line.text.startswith(line.label):
+        return line.text[len(line.label):]
+    return line.text
+
+
+def _first_word(text: str) -> str:
+    words = re.findall(r"[A-Za-z]+", text)
+    return words[0].lower() if words else ""
+
 
 def _span(a: str, b: str) -> str:
     """'page 2' + 'page 4' -> 'pages 2-4'; 'row 5' + 'row 9' -> 'rows 5-9'."""
@@ -150,65 +262,104 @@ SHORT_HEADING = 70  # longer lines are numbered paragraphs, not titles
 
 
 def _looks_like_title(line: str) -> bool:
-    """'4. Evaluation' is a title; '4.1 Tenders will be evaluated ...' is a paragraph."""
-    return len(line) <= SHORT_HEADING and not line.rstrip().endswith((".", ";", ",", ":"))
+    """'4. Evaluation' is a title; '4.1 Tenders will be evaluated ...' and
+    '12.5 Supplier shall be entitled to terminate:-' are paragraphs."""
+    stripped = line.rstrip()
+    return (len(stripped) <= SHORT_HEADING and not stripped.endswith((".", ";", ",", ":", "-", ":-"))
+            and not re.search(r"[;,]\s*(and|or)$", stripped) and not _ends_mid_sentence(stripped))
+
+
+def _short(text: str, limit: int = SHORT_HEADING) -> str:
+    return text if len(text) <= limit else text[:limit - 3].rstrip() + "..."
 
 
 class _SectionBuilder:
-    """Collects (line, location) pairs and starts a new section at each heading."""
+    """Turns planned lines into sections with readable references."""
 
-    def __init__(self, doc_name: str, detector: HeadingDetector | None):
+    def __init__(self, doc_name: str):
         self.doc_name = doc_name
-        self.detector = detector
         self.sections: list[Section] = []
         self._lines: list[str] = []
         self._locs: list[tuple[int, str]] = []
         self._size = 0
+        self._name: str | None = None
         self._clause: str | None = None
         self._heading: str | None = None
-        self._parent: str | None = None      # the last title, e.g. "4. Evaluation"
-        self._section_parent: str | None = None
-        self._is_title = False
+        self._titles: list[tuple[str | None, str]] = []   # (label, text) of every title so far
+        self._top: str | None = None                      # current schedule / appendix, if any
 
-    def add(self, line: str, location: str | None, force_heading: bool = False) -> None:
-        stripped = line.strip()
-        if not stripped:
+    def build(self, lines: list[_Line]) -> list[Section]:
+        for l in lines:
+            if l.heading:
+                self._start(l)
+            self._append(l.text, l.location)
+        self._flush()
+        return self.sections
+
+    def _start(self, l: _Line) -> None:
+        self._flush()
+        self._clause, self._heading = l.label, l.text[:200]
+        if l.contents_start:
+            self._name, self._clause = "contents list", None
             return
-        label = self.detector.match(stripped) if self.detector else None
-        if force_heading or label:
-            self.flush()
-            self._clause = label
-            self._heading = stripped[:200]
-            self._is_title = force_heading or _looks_like_title(stripped)
-            if self._is_title:
-                self._parent = stripped[:SHORT_HEADING]
-                self._section_parent = None
+        if l.after_contents:
+            self._name, self._clause, self._heading = "text after the contents list", None, None
+            return
+        if l.forced_heading or _looks_like_title(l.text):
+            title = _short(l.text)
+            if TOP_LEVEL_WORDS.match(l.text):
+                self._top = _short(l.text, 40)
+                self._name = title
             else:
-                self._section_parent = self._parent
+                self._name = title + (f" in {self._top}" if self._top else "")
+            self._titles.append((l.label, title))
+            return
+        # A numbered paragraph: name it by its number and the title it sits under.
+        parent = self._parent_for(l.label)
+        label = l.label or _short(l.text, 40)
+        if label[:1].isdigit():
+            in_schedule = parent and (TOP_LEVEL_WORDS.match(parent) or (self._top and parent != self._top))
+            label = ("paragraph " if in_schedule else "clause ") + label
+        name = label
+        if parent:
+            name += f" in '{parent}'"
+        if self._top and parent != self._top:
+            name += f", {self._top}"
+        self._name = name
+
+    def _parent_for(self, label: str | None) -> str | None:
+        if not self._titles:
+            return None
+        if label and NUMBERED.fullmatch(label):
+            for t_label, t_text in reversed(self._titles):
+                if t_label and NUMBERED.fullmatch(t_label):
+                    if label.startswith(t_label + "."):
+                        return t_text
+                elif t_label is None or not t_label[:1].isdigit():
+                    return t_text   # a schedule or unnumbered title bounds the search
+        return self._titles[-1][1]
+
+    def _append(self, text: str, location: str | None) -> None:
         if location and (not self._locs or self._locs[-1][1] != location):
             self._locs.append((self._size, location))
-        self._lines.append(stripped)
-        self._size += len(stripped) + 1
+        self._lines.append(text)
+        self._size += len(text) + 1
 
-    def flush(self) -> None:
+    def _flush(self) -> None:
         if not self._lines:
             return
-        text = "\n".join(self._lines)
-        section = Section(self.doc_name, "", text, self._clause, self._heading, self._locs)
-        name = self._heading or "start of document"
-        if self._heading and not self._is_title:
-            # A numbered paragraph rather than a heading: name it by its number
-            # and the heading it sits under.
-            label = self._clause or name[:40].rstrip() + "..."
-            name = label if not label[:1].isdigit() else f"clause {label}"
-            if self._section_parent:
-                name += f" in '{self._section_parent}'"
+        section = Section(self.doc_name, "", "\n".join(self._lines), self._clause, self._heading, self._locs)
+        name = self._name or "start of document"
         span = section.location_span()
         section.ref = f"{name} ({span})" if span else name
         self.sections.append(section)
         self._lines, self._locs, self._size = [], [], 0
-        self._clause = self._heading = self._section_parent = None
-        self._is_title = False
+        self._name = self._clause = self._heading = None
+
+
+def _build_sections(doc_name: str, lines: list[_Line], detector: HeadingDetector | None) -> list[Section]:
+    _plan_headings(lines, detector)
+    return _SectionBuilder(doc_name).build(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -219,27 +370,38 @@ def _normalise_furniture(line: str) -> str:
     return re.sub(r"\d+", "#", line.strip().lower())
 
 
-def _strip_page_furniture(pages: list[list[str]], doc: Document) -> list[list[str]]:
-    """Remove headers and footers repeated on most pages (e.g. 'Page 3 of 40')."""
-    if len(pages) < 3:
+FURNITURE_TOP, FURNITURE_BOTTOM = 6, 4   # lines checked at the top and bottom of each page
+
+
+def _edge_indexes(lines: list[str]) -> set[int]:
+    filled = [i for i, l in enumerate(lines) if l.strip()]
+    return set(filled[:FURNITURE_TOP] + filled[-FURNITURE_BOTTOM:])
+
+
+def _strip_page_furniture(pages: list[list[str]], doc: Document,
+                          detector: HeadingDetector | None = None) -> list[list[str]]:
+    """Remove headers and footers repeated on most pages (e.g. 'Page 3 of 40').
+    Lines that look like clause headings are never removed."""
+    with_text = [p for p in pages if any(l.strip() for l in p)]
+    if len(with_text) < 3:
         return pages
     counts: Counter = Counter()
     originals: dict[str, str] = {}
-    for lines in pages:
-        edge = {_normalise_furniture(l) for l in lines[:2] + lines[-2:] if l.strip()}
-        counts.update(edge)
-        for l in lines[:2] + lines[-2:]:
-            originals.setdefault(_normalise_furniture(l), l.strip())
-    threshold = max(3, int(0.6 * len(pages)))
-    repeated = {k for k, n in counts.items() if n >= threshold}
+    for lines in with_text:
+        keys = {_normalise_furniture(lines[i]) for i in _edge_indexes(lines)}
+        counts.update(keys)
+        for i in _edge_indexes(lines):
+            originals.setdefault(_normalise_furniture(lines[i]), lines[i].strip())
+    threshold = max(3, (len(with_text) + 1) // 2)
+    repeated = {k for k, n in counts.items()
+                if n >= threshold and k and not (detector and detector.match(originals[k]))}
     if not repeated:
         return pages
     cleaned = []
     for lines in pages:
-        n = len(lines)
-        edge_positions = {0, 1, n - 2, n - 1}
-        cleaned.append([line for i, line in enumerate(lines)
-                        if not (i in edge_positions and _normalise_furniture(line) in repeated)])
+        edges = _edge_indexes(lines)
+        cleaned.append([l for i, l in enumerate(lines)
+                        if not (i in edges and _normalise_furniture(l) in repeated)])
     examples = [originals[k] for k in sorted(repeated)][:3]
     doc.notes.append(f"Removed {len(repeated)} repeated page header/footer line(s), e.g. "
                      + "; ".join(f"'{e}'" for e in examples))
@@ -275,13 +437,13 @@ def read_pdf(path: Path, detector: HeadingDetector) -> Document:
                             f"not be reviewed (pages {_page_list(blank)}). They may be scanned images "
                             f"or drawings.")
 
-    pages = _strip_page_furniture(pages, doc)
-    builder = _SectionBuilder(path.name, detector)
+    pages = _strip_page_furniture(pages, doc, detector)
+    planned: list[_Line] = []
     for number, lines in enumerate(pages, start=1):
-        for line in lines:
-            builder.add(line, f"page {number}")
-    builder.flush()
-    doc.sections = builder.sections
+        filled = [l for l in lines if l.strip()]
+        for i, line in enumerate(filled):
+            planned.append(_Line(line, f"page {number}", page_tail=i >= len(filled) - 3))
+    doc.sections = _build_sections(path.name, planned, detector)
     return doc
 
 
@@ -304,7 +466,7 @@ def read_docx(path: Path, detector: HeadingDetector) -> Document:
     body_xml = d.element.body.xml
     has_layout_pages = "lastRenderedPageBreak" in body_xml
     page = 1
-    builder = _SectionBuilder(path.name, detector)
+    planned: list[_Line] = []
 
     def page_label() -> str | None:
         return f"page {page}" if has_layout_pages else None
@@ -318,7 +480,7 @@ def read_docx(path: Path, detector: HeadingDetector) -> Document:
                     if not cells or cells[-1] != t:   # merged cells repeat their text
                         cells.append(t)
                 if any(cells):
-                    builder.add(" | ".join(cells), page_label())
+                    planned.append(_Line(" | ".join(cells), page_label()))
             continue
         # paragraph: a page break at its very start moves it to the next page;
         # a break part-way through means it starts on this page and runs on.
@@ -334,10 +496,9 @@ def read_docx(path: Path, detector: HeadingDetector) -> Document:
         text = block.text
         style = (block.style.name if block.style is not None else "") or ""
         is_heading = style.lower().startswith(("heading", "title"))
-        builder.add(text, page_label(), force_heading=is_heading and bool(text.strip()))
+        planned.append(_Line(text, page_label(), forced_heading=is_heading and bool(text.strip())))
         page += breaks_after
-    builder.flush()
-    doc.sections = builder.sections
+    doc.sections = _build_sections(path.name, planned, detector)
 
     if not doc.sections:
         doc.warnings.append("The Word file contains no text.")
@@ -373,14 +534,11 @@ def read_xlsx(path: Path, rows_per_section: int = 50) -> Document:
                     rows.append((r_index, " | ".join(cells)))
             for start in range(0, len(rows), rows_per_section):
                 block = rows[start:start + rows_per_section]
-                builder = _SectionBuilder(path.name, None)
-                for r_index, line in block:
-                    builder.add(line, f"row {r_index}")
-                builder.flush()
-                for s in builder.sections:
-                    s.ref = f"sheet '{ws.title}' ({s.location_span()})"
-                    s.heading = f"sheet '{ws.title}'"
-                doc.sections.extend(builder.sections)
+                sections = _build_sections(path.name, [_Line(line, f"row {r}") for r, line in block], None)
+                for sec in sections:
+                    sec.ref = f"sheet '{ws.title}' ({sec.location_span()})"
+                    sec.heading = f"sheet '{ws.title}'"
+                doc.sections.extend(sections)
     finally:
         wb.close()
     if not doc.sections:
@@ -395,11 +553,8 @@ def read_text(path: Path, detector: HeadingDetector) -> Document:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         text = raw.decode("cp1252", errors="replace")
-    builder = _SectionBuilder(path.name, None if path.suffix.lower() == ".csv" else detector)
-    for number, line in enumerate(text.splitlines(), start=1):
-        builder.add(line, f"line {number}")
-    builder.flush()
-    doc.sections = builder.sections
+    planned = [_Line(line, f"line {n}") for n, line in enumerate(text.splitlines(), start=1)]
+    doc.sections = _build_sections(path.name, planned, None if path.suffix.lower() == ".csv" else detector)
     if not doc.sections:
         doc.warnings.append("The file is empty.")
     return doc

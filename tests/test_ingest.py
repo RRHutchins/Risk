@@ -200,3 +200,105 @@ def test_hidden_excel_sheet_is_noted(tmp_path):
     docs, _ = read_folder(tmp_path)
     assert any("Secret" in n for n in docs[0].notes)
     assert any("hidden rates" in s.text for s in docs[0].sections)
+
+
+# ----- lessons from real contracts (Harrogate ITT, Bradford supply agreement) ---
+
+def sections_of(tmp_path, text, name="doc.txt"):
+    (tmp_path / name).write_text(text, encoding="utf-8")
+    docs, _ = read_folder(tmp_path, extra_heading_patterns=PACK_PATTERNS)
+    return docs[0].sections
+
+
+def test_cross_reference_at_start_of_line_is_not_a_heading(tmp_path):
+    secs = sections_of(tmp_path, "4. PAYMENT\n4.1 Charges are as set out in\nSchedule 1\nand interest under\n"
+                                 "Clause 6.1.2 shall be compounded.\n4.2 A Heat Bill is issued under\n"
+                                 "clause 8.1.2 of the Connection Agreement.\n")
+    assert [s.ref.split(" (")[0] for s in secs] == [
+        "4. PAYMENT", "clause 4.1 in '4. PAYMENT'", "clause 4.2 in '4. PAYMENT'"]
+
+
+def test_capitals_heading_after_signature_block(tmp_path):
+    secs = sections_of(tmp_path, "Signed for and on behalf of\nSignature of\nSCHEDULE 1\nHeat charges\n")
+    assert secs[-1].clause == "SCHEDULE 1"
+
+
+def test_repeated_stamp_is_not_a_heading(tmp_path):
+    body = "1. SERVICE STANDARDS\n" + "Target REDACTED UNDER FOIA\n43 COMMERCIAL\nINTERESTS\n" * 5
+    secs = sections_of(tmp_path, body)
+    assert len(secs) == 1
+
+
+def test_no_as_a_word_and_no_as_number(tmp_path):
+    secs = sections_of(tmp_path, "26. NO PARTNERSHIP OR AGENCY\n26.1 Nothing creates a partnership.\n"
+                                 "The plant comprises\n2 No. pumps and a tank.\n")
+    assert [s.clause for s in secs] == ["26", "26.1"]
+
+
+def test_lead_in_lines_are_not_titles_and_parents_follow_numbering(tmp_path):
+    secs = sections_of(tmp_path, "1. DEFINITIONS\n1.1 Definitions\n\"Heat\" means heat.\n"
+                                 "1.2 Headings do not affect interpretation.\n12. TERMINATION\n"
+                                 "12.5 Supplier may terminate this Agreement:-\n12.5.1 on insolvency; or\n"
+                                 "12.6 Either party may terminate on notice.\n")
+    refs = [s.ref for s in secs]
+    assert "clause 1.2 in '1. DEFINITIONS' (line 4)" in refs
+    assert "clause 12.5.1 in '12. TERMINATION' (line 7)" in refs
+    assert "clause 12.6 in '12. TERMINATION' (line 8)" in refs
+
+
+def test_contents_list_with_page_numbers(tmp_path):
+    secs = sections_of(tmp_path, "SUPPLY AGREEMENT\n1 DEFINITIONS 4\n2 PROVISION OF HEAT 14\n3 PAYMENT 16\n"
+                                 "4 TERMINATION 23\nSCHEDULE 1 – CHARGES 35\nTHIS AGREEMENT is dated 2024\n"
+                                 "1. DEFINITIONS\n1.1 Words have these meanings.\n2. PROVISION OF HEAT\n"
+                                 "3. PAYMENT\n4. TERMINATION\nSCHEDULE 1\nCharges\n")
+    refs = [s.ref.split(" (")[0] for s in secs]
+    assert refs[:4] == ["start of document", "contents list", "text after the contents list", "1. DEFINITIONS"]
+    assert "SCHEDULE 1 – CHARGES 35" in secs[1].text
+    assert refs[-1] == "SCHEDULE 1"
+
+
+def test_contents_list_without_page_numbers(tmp_path):
+    secs = sections_of(tmp_path, "INVITATION TO TENDER\n1. Introduction\n2. Scope of Work\n3. Milestones\n"
+                                 "4. Evaluation\n1. Introduction\nThe Council invites tenders.\n2. Scope of Work\n"
+                                 "Prepare a study.\n3. Milestones\nBy March.\n4. Evaluation\nPrice 40%.\n")
+    refs = [s.ref.split(" (")[0] for s in secs]
+    assert refs == ["start of document", "contents list", "1. Introduction", "2. Scope of Work",
+                    "3. Milestones", "4. Evaluation"]
+
+
+def test_numbered_items_in_schedules_are_paragraphs(tmp_path):
+    secs = sections_of(tmp_path, "SCHEDULE 6\n1. WORKS PERIOD REPORTING\n1.1 The Supplier reports monthly.\n"
+                                 "SCHEDULE 3\n1 The Supplier is responsible for the meter.\n")
+    refs = [s.ref.split(" (")[0] for s in secs]
+    assert refs == ["SCHEDULE 6", "1. WORKS PERIOD REPORTING in SCHEDULE 6",
+                    "paragraph 1.1 in '1. WORKS PERIOD REPORTING', SCHEDULE 6",
+                    "SCHEDULE 3", "paragraph 1 in 'SCHEDULE 3'"]
+
+
+def test_pdf_footnotes_and_multi_line_headers(tmp_path):
+    c = canvas.Canvas(str(tmp_path / "itt.pdf"), pagesize=A4)
+    for n in range(1, 5):
+        y = 800
+        for line in [f"Page {n} of 4", "Town Heating Project", "Invitation to Tender", "Feasibility Study",
+                     "", f"{n}.  Section {n} Title"] + [f"Body line {k} on page {n}." for k in range(8)]:
+            c.drawString(50, y, line)
+            y -= 16
+        c.drawString(50, 60, f"{n} Footnote source number {n * 7} | Climate Charity")
+        c.showPage()
+    c.save()
+    docs, _ = read_folder(tmp_path)
+    secs = docs[0].sections
+    assert [s.ref for s in secs] == [f"{n}.  Section {n} Title (page {n})" for n in range(1, 5)]
+    assert "Invitation to Tender" not in secs[0].text
+    assert "Footnote source number 7" in secs[0].text   # footnote text kept, just not a heading
+
+
+def test_short_pdf_keeps_headings_at_top_of_every_page(tmp_path):
+    c = canvas.Canvas(str(tmp_path / "short.pdf"), pagesize=A4)
+    for n in range(1, 5):
+        c.drawString(50, 800, f"Section {n}")
+        c.drawString(50, 780, f"Text of section {n}.")
+        c.showPage()
+    c.save()
+    docs, _ = read_folder(tmp_path)
+    assert [s.clause for s in docs[0].sections] == [f"Section {n}" for n in range(1, 5)]

@@ -145,6 +145,13 @@ How references work:
 Things to know:
 - Headers and footers repeated on most PDF pages (such as "Page 3 of 40") are removed
   automatically, and a note says so.
+- A contents list at the front of a document is kept together as one section called
+  "contents list", so its entries are not mistaken for the clauses themselves.
+- Footnotes, cross-references that happen to start a line ("... in accordance with /
+  Clause 4.2"), and repeated stamps (such as "REDACTED UNDER FOIA 43 COMMERCIAL
+  INTERESTS") are kept as text but do not start new sections.
+- Numbered items inside a schedule or appendix are called "paragraph" and name their
+  schedule, for example `paragraph 1.1 in '1. WORKS PERIOD REPORTING', SCHEDULE 6`.
 - Word's automatic paragraph numbering is not part of the text, so where a document
   relies on it, references use the nearest heading instead. A note tells you when.
 - Files that cannot be read are listed with the reason and what to do, for example
