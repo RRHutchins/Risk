@@ -64,17 +64,29 @@ def test_estimate_with_no_documents_is_zero():
 
 def test_cost_guard_stops_before_cap():
     guard = CostGuard(cap_usd=1.00, pricing=PRICING)
-    guard.check_before(0.90)  # fine
-    guard.record("model-a", Usage(output=80_000))  # $0.80
-    assert guard.spent_usd == pytest.approx(0.80)
+    guard.reserve(0.90)
+    cost = guard.record("model-a", Usage(output=80_000), reserved_usd=0.90)  # $0.80
+    assert cost == pytest.approx(0.80) and guard.spent_usd == pytest.approx(0.80)
+    assert guard.reserved_usd == 0
     with pytest.raises(SpendCapExceeded):
-        guard.check_before(0.30)
+        guard.reserve(0.30)
 
 
-def test_cost_guard_stops_when_over_cap():
+def test_cost_guard_counts_calls_in_progress():
+    guard = CostGuard(cap_usd=1.00, pricing=PRICING)
+    guard.reserve(0.40)
+    guard.reserve(0.40)
+    with pytest.raises(SpendCapExceeded):
+        guard.reserve(0.40)          # three calls at once could pass the cap
+    guard.release(0.40)
+    guard.reserve(0.40)              # one finished or failed: room again
+
+
+def test_cost_guard_after_overspend_refuses_further_calls():
     guard = CostGuard(cap_usd=0.50, pricing=PRICING)
+    guard.record("model-a", Usage(output=60_000))  # $0.60, more than reserved
     with pytest.raises(SpendCapExceeded):
-        guard.record("model-a", Usage(output=60_000))  # $0.60
+        guard.reserve(0.01)
 
 
 def test_ledger_records_and_totals(tmp_path):

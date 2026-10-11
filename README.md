@@ -3,10 +3,12 @@
 This tool reads a construction tender pack and tells a contractor what risks they
 would be taking on, what to do about them, and how much contingency to price in.
 
-**Current status: Stage 2 of 9 (reading documents).** At this stage the tool can
-read a folder of tender documents, split them into clauses and sections with page
-references, and estimate what a real review would cost. It does **not** yet call
-Claude or produce a risk register.
+**Current status: Stage 3 of 9 (finding risks).** The tool reads a folder of tender
+documents, splits them into clauses with page references, and asks Claude to find
+the risks and answer the checklist. Every quote Claude gives is checked against the
+documents by the software; findings whose quote cannot be found are set aside.
+Scores, contingency, the Word report and the colour-coded register come in later
+stages.
 
 > Automated risk screening for review by a competent person. Not legal advice.
 
@@ -104,13 +106,50 @@ python -m risk_engine check
 ```
 
 You should see a list of items marked `installed` or `loaded`, ending with **All good.**
-The API key line will say "not set". That is fine for now; it is needed from Stage 3.
+The API key line will say "not set" until you do Step 6.
+
+### Step 6. Set up your Claude API key (needed for finding risks)
+
+The API key is like a password that lets the tool use your Anthropic account. Keep it
+private. It is never stored in this project's files.
+
+**Get a key**
+1. Go to <https://console.anthropic.com> and sign in.
+2. Add credit under **Settings > Billing** if you have not already.
+3. Recommended safety net: under **Settings > Limits**, set a monthly spend limit
+   (for example $100, your build-and-test budget). Anthropic then refuses anything
+   beyond it, whatever happens on your computer.
+4. Go to **Settings > API Keys**, click **Create Key**, give it a name such as
+   `tender-risk`, and copy the key. It starts `sk-ant-`. You will not be shown it again.
+
+**Store the key on your computer**
+
+- **Windows:** in the command window, type the line below, replacing the example with
+  your key (keep the quotes), and press Enter:
+  ```
+  setx ANTHROPIC_API_KEY "sk-ant-your-key-here"
+  ```
+  You should see `SUCCESS: Specified value was saved.` **Close the command window and
+  open a new one** (Step 3), then switch the workspace on again. The key only works in
+  windows opened after this.
+- **Mac:** in Terminal, type the line below, replacing the example with your key (keep
+  both sets of quotes), and press Enter:
+  ```
+  echo 'export ANTHROPIC_API_KEY="sk-ant-your-key-here"' >> ~/.zshrc
+  ```
+  **Close Terminal and open it again** (Step 3), then switch the workspace on again.
+
+Check it worked: run `python -m risk_engine check`. The API key line should say `found`.
+
+To change the key later, repeat the step with the new key (on a Mac, also delete the
+old line from the file `.zshrc` in your home folder).
 
 ---
 
 ## Part 2: Using the tool
 
-Nothing in this part sends anything anywhere or costs anything.
+Only `extract` sends anything anywhere or costs anything. Everything else is free and
+stays on your computer.
 
 ### Every time you start
 
@@ -188,6 +227,47 @@ If you type the path yourself and it contains spaces, put it in double quotes, f
 
 The sample in `samples/demo_tender` is a small, made-up tender pack used for testing.
 
+### Find the risks (Stage 3; spends API credit)
+
+- Windows: `python -m risk_engine extract samples\demo_tender`
+- Mac: `python -m risk_engine extract samples/demo_tender`
+
+Before anything is sent, the tool shows how many pieces of text it will send, the
+estimated cost, your per-run cap and your remaining budget. It stops by itself if the
+estimate is over the cap or your budget. Type `yes` and press Enter to start, or just
+press Enter to cancel.
+
+While it runs, each piece is listed as it finishes, with the number of findings and
+its cost. Pieces are sent four at a time, so a typical tender pack takes a few
+minutes. The demo pack costs about $0.15. If the run would pass the per-run cap, it
+stops before sending the next piece and keeps what it has done.
+
+When it finishes, it saves a new folder in `outputs` containing:
+
+| File | What it is |
+|---|---|
+| `records.xlsx` | **Open this.** The findings, for you to check. See below. |
+| `extraction_audit.json` | Everything needed to reproduce and audit the run: every finding, every quote check, the exact instructions sent to Claude, the model used, tokens and cost of each call. |
+| `sections.xlsx` | How the documents were split (as in Stage 2). |
+
+`records.xlsx` has five sheets:
+- **Run summary**: pieces reviewed, findings accepted and excluded, share of quotes
+  verified, checklist questions answered, cost and time.
+- **Risk records**: each finding, with its type (threat or opportunity), category,
+  description, the document and exact reference (worked out by the software from where
+  the quote was found), the quote, Claude's likelihood and impact judgements with
+  reasons, existing controls, suggested response and confidence.
+- **Excluded**: findings set aside, each with the reason, for example "quote not
+  verified: quote not found in the document". These are not used further.
+- **Checklist**: the 10 checklist questions, each "answered" (with its quote),
+  "answer found but quote not verified", or "not found in the documents".
+- **Pieces reviewed**: every piece of text sent, and whether Claude reviewed it.
+  Anything marked refused, too_long or skipped was **not reviewed** and needs a look
+  by hand.
+
+Likelihood and impact are Claude's judgements, given with reasons. Scores, money and
+contingency are calculated by the software in Stage 4.
+
 ### See your spending to date
 
 ```
@@ -205,8 +285,8 @@ local time. The ledger file itself (`ledger/spend_ledger.csv`) records times in 
 
 | Folder or file | What it is |
 |---|---|
-| `config/settings.yaml` | **The settings you can change**: models, prices, spending cap, simulation settings. Every line is explained. |
-| `packs/construction_tender/` | The construction tender "domain pack": risk categories, scales, checklist, and the instructions given to Claude. Edit these to change what the tool looks for. |
+| `config/settings.yaml` | **The settings you can change**: models, prices, spending cap, how hard Claude thinks, simulation settings. Every line is explained. |
+| `packs/construction_tender/` | The construction tender "domain pack": risk categories, scales, checklist, worked examples, and the instructions given to Claude (`extract_prompt.md`, in plain English). Edit these to change what the tool looks for. |
 | `samples/demo_tender/` | A small, made-up tender pack for testing. |
 | `outputs/` | Results of each run, one folder per run, including the sections list and the audit file. Each folder is named with the date, the time and a short random code, so no run ever overwrites another. Stays on your computer. |
 | `ledger/spend_ledger.csv` | The running record of every run and every dollar spent. Opens in Excel. Stays on your computer. |
@@ -226,10 +306,11 @@ On a Mac, if TextEdit shows formatting options, choose **Format > Make Plain Tex
 
 ## Your data and your API key
 
-- Documents are read on your own computer. From Stage 3 onwards, document text is sent
-  only to the Claude API (Anthropic) for review. Nothing is uploaded anywhere else.
-- The API key is read from an environment variable called `ANTHROPIC_API_KEY`. It is
-  never written into any file in this project. Setup instructions come with Stage 3.
+- Documents are read on your own computer. Only the `extract` command sends document
+  text anywhere, and then only to the Claude API (Anthropic) for review. Nothing is
+  uploaded anywhere else.
+- The API key is read from an environment variable called `ANTHROPIC_API_KEY` (see
+  Step 6). It is never written into any file in this project, the logs or the audit file.
 - `outputs/` and `ledger/` are excluded from GitHub, so your results stay private.
 
 ---
@@ -244,6 +325,11 @@ On a Mac, if TextEdit shows formatting options, choose **Format > Make Plain Tex
 | `No module named risk_engine` | The command window is not in the `Risk` folder. Repeat Step 3. |
 | `No module named yaml` (or another name) | The workspace is not switched on. Run the activate line from "Every time you start". |
 | `Folder not found` | Check the spelling, or drag the folder into the window instead of typing it. |
+| `STOPPED: no API key found` | Do Step 6, then open a new command window. |
+| `The API key was rejected` | The key was mistyped or has been deleted. Create a new one (Step 6). |
+| `Your Anthropic credit balance is too low` | Add credit at console.anthropic.com under Settings > Billing. |
+| `STOPPED: the estimate is over the per-run cap` | Raise `per_run_cap_usd` in `config/settings.yaml`, or run on fewer documents. |
+| A piece is marked `refused` or `too_long` | That part of the documents was not reviewed. Check it by hand. For `too_long`, lowering `max_chunk_tokens` in the settings sends smaller pieces. |
 | A document shows "probably a scanned PDF" | That PDF is an image with no text. It cannot be reviewed until it is converted with OCR software. |
 
 ---

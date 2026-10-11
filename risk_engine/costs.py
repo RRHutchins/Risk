@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import math
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -146,33 +147,49 @@ def estimate_run(chunk_tokens: list[int], pack_context_tokens: int, synth_prompt
 class CostGuard:
     """Keeps a running total for one run and stops it at the cap.
 
-    Call check_before() with the expected cost of the next call. If that call
-    could take the run over the cap, the run is stopped before spending it.
-    Call record() after every call with the real token usage.
+    Before each API call, reserve() its expected cost: if the money already
+    spent plus every call still in progress plus this one could pass the cap,
+    the call is refused before anything is spent. After the call, record() the
+    real token usage, which releases the reservation. Safe to use from several
+    threads at once.
     """
 
     def __init__(self, cap_usd: float, pricing: dict):
         self.cap_usd = cap_usd
         self.pricing = pricing
         self.spent_usd = 0.0
+        self.reserved_usd = 0.0
+        self._lock = threading.Lock()
+
+    def reserve(self, expected_cost_usd: float) -> None:
+        with self._lock:
+            committed = self.spent_usd + self.reserved_usd
+            if committed + expected_cost_usd > self.cap_usd:
+                raise SpendCapExceeded(
+                    f"Stopping: this run has spent ${self.spent_usd:.4f} (plus ${self.reserved_usd:.4f} "
+                    f"for calls in progress) and the next call could cost about ${expected_cost_usd:.4f}, "
+                    f"which would pass the per-run cap of ${self.cap_usd:.2f} (set in "
+                    f"config/settings.yaml, budget: per_run_cap_usd)."
+                )
+            self.reserved_usd += expected_cost_usd
+
+    def release(self, expected_cost_usd: float) -> None:
+        """Cancel a reservation for a call that was not made or failed."""
+        with self._lock:
+            self.reserved_usd = max(0.0, self.reserved_usd - expected_cost_usd)
+
+    def record(self, model: str, usage: Usage, reserved_usd: float = 0.0, batch: bool = False) -> float:
+        """Record what a call really cost. Returns the cost in US dollars."""
+        cost = price_usage(model, usage, self.pricing, batch=batch)
+        with self._lock:
+            self.reserved_usd = max(0.0, self.reserved_usd - reserved_usd)
+            self.spent_usd += cost
+        return cost
 
     def check_before(self, expected_cost_usd: float) -> None:
-        if self.spent_usd + expected_cost_usd > self.cap_usd:
-            raise SpendCapExceeded(
-                f"Stopping: this run has spent ${self.spent_usd:.4f} and the next step could cost "
-                f"about ${expected_cost_usd:.4f}, which would pass the per-run cap of "
-                f"${self.cap_usd:.2f} (set in config/settings.yaml, budget: per_run_cap_usd)."
-            )
-
-    def record(self, model: str, usage: Usage, batch: bool = False) -> float:
-        cost = price_usage(model, usage, self.pricing, batch=batch)
-        self.spent_usd += cost
-        if self.spent_usd > self.cap_usd:
-            raise SpendCapExceeded(
-                f"Stopping: this run has spent ${self.spent_usd:.4f}, over the per-run cap of "
-                f"${self.cap_usd:.2f}."
-            )
-        return cost
+        """Raise if a call of this cost could pass the cap (without reserving)."""
+        self.reserve(expected_cost_usd)
+        self.release(expected_cost_usd)
 
 
 # ---------------------------------------------------------------------------

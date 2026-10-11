@@ -3,6 +3,7 @@
     python -m risk_engine check              check the installation
     python -m risk_engine ingest FOLDER      read and split documents, list the sections
     python -m risk_engine dry-run FOLDER     read documents and estimate cost (no API calls)
+    python -m risk_engine extract FOLDER     find risks with Claude (spends API credit)
     python -m risk_engine ledger             show spending to date
 """
 
@@ -46,9 +47,9 @@ def cmd_check(args, settings) -> int:
             ok = False
     key_var = settings.get("api_key_env_var", "ANTHROPIC_API_KEY")
     if api_key_present(settings):
-        print(f"  API key ({key_var}) ... found (not needed for a dry run)")
+        print(f"  API key ({key_var}) ... found")
     else:
-        print(f"  API key ({key_var}) ... not set (fine for now; needed from Stage 3)")
+        print(f"  API key ({key_var}) ... not set (needed for 'extract'; see README)")
     print()
     print("All good." if ok else "Some problems were found; see above.")
     return 0 if ok else 1
@@ -131,6 +132,75 @@ def cmd_dry_run(args, settings) -> int:
     return 0
 
 
+def cmd_extract(args, settings) -> int:
+    from risk_engine.pipeline import plan_extraction, run_extraction
+
+    folder = Path(args.folder)
+    if not _folder_ok(folder):
+        return 1
+    plan = plan_extraction(folder, settings, pack_name=args.pack)
+    print(LINE)
+    print("EXTRACT RISKS WITH CLAUDE")
+    print(LINE)
+    print(f"Folder:      {plan.folder}")
+    print(f"Domain pack: {plan.pack.name}")
+    print(f"Documents:   {len(plan.docs)} read, {len(plan.skipped)} not read")
+    for d in plan.docs:
+        for w in d.warnings:
+            print(f"  WARNING ({d.name}): {w}")
+    for s in plan.skipped:
+        print(f"  Not read: {s.name}: {s.reason}.")
+    if not plan.chunks:
+        print("\nThere is no readable text to review.")
+        return 1
+    print(f"\nThe text will be sent to Claude ({settings['models']['extraction']}) in {len(plan.chunks)} piece(s).")
+    print(f"Estimated cost:     ${plan.estimate_usd:.2f}")
+    print(f"Per-run cap:        ${plan.cap_usd:.2f}")
+    print(f"Budget remaining:   ${plan.total_budget_usd - plan.spent_to_date_usd:.2f} "
+          f"of ${plan.total_budget_usd:.2f}")
+    if not plan.within_cap:
+        print("\nSTOPPED: the estimate is over the per-run cap. Nothing has been sent.")
+        print("To go ahead, raise per_run_cap_usd in config/settings.yaml, or review fewer documents.")
+        return 1
+    if not plan.within_budget:
+        print("\nSTOPPED: this run could take you over your total budget. Nothing has been sent.")
+        print("To go ahead, raise total_budget_usd in config/settings.yaml.")
+        return 1
+    if not api_key_present(settings):
+        key_var = settings.get("api_key_env_var", "ANTHROPIC_API_KEY")
+        print(f"\nSTOPPED: no API key found. Nothing has been sent.")
+        print(f"Set the {key_var} environment variable first; see 'Setting up your API key' in README.md.")
+        return 1
+    print("\nDocument text is sent only to the Claude API (Anthropic). The run stops itself if it")
+    print("would pass the per-run cap.")
+    if not args.yes:
+        answer = input("\nType yes and press Enter to start, or just press Enter to cancel: ").strip().lower()
+        if answer not in ("yes", "y"):
+            print("Cancelled. Nothing has been sent.")
+            return 0
+    print("\nWorking. Each piece usually takes under a minute.")
+    r = run_extraction(plan, settings)
+    s = r["summary"]
+    print(LINE)
+    if s["stopped_because"]:
+        print(f"RUN STOPPED EARLY: {s['stopped_because']}")
+        print("What was done before it stopped has been saved.")
+    print(f"Pieces reviewed:          {s['pieces_reviewed']} of {s['pieces_total']}")
+    if s["pieces_not_reviewed"]:
+        print(f"  NOT reviewed:           {s['pieces_not_reviewed']} (see the 'Pieces reviewed' sheet)")
+    print(f"Risk records accepted:    {s['records_accepted']}")
+    print(f"Records excluded:         {s['records_excluded']} (quote not verified or record incomplete)")
+    if s["quotes_verified_share"] is not None:
+        print(f"Quotes verified:          {s['quotes_verified_share']:.1%}")
+    print(f"Checklist answered:       {s['checklist_answered']} of {s['checklist_items']}")
+    print(f"Cost:                     ${s['actual_usd']:.4f} (estimate was ${s['estimated_usd']:.2f})")
+    print(f"Time taken:               {s['seconds']:.0f} seconds")
+    print(f"\nRecords to check in Excel: {r['records_file']}")
+    print(f"Audit file:                {r['audit_file']}")
+    print(LINE)
+    return 0 if not s["stopped_because"] else 1
+
+
 def cmd_ledger(args, settings) -> int:
     ledger = Ledger(resolve_path(settings["budget"]["ledger_file"]))
     budget = settings["budget"]["total_budget_usd"]
@@ -178,6 +248,11 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--pack", help="domain pack to use (default from settings)")
     d.add_argument("--batch", action="store_true", help="estimate using batch (unattended) pricing")
 
+    e = sub.add_parser("extract", help="find risks with Claude (spends API credit)")
+    e.add_argument("folder", help="folder containing the tender documents")
+    e.add_argument("--pack", help="domain pack to use (default from settings)")
+    e.add_argument("--yes", action="store_true", help="start without asking for confirmation")
+
     sub.add_parser("ledger", help="show spending to date")
     return p
 
@@ -187,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings = load_settings(args.settings)
         return {"check": cmd_check, "ingest": cmd_ingest, "dry-run": cmd_dry_run,
-                "ledger": cmd_ledger}[args.command](args, settings)
+                "extract": cmd_extract, "ledger": cmd_ledger}[args.command](args, settings)
     except ConfigError as e:
         print(f"Setup problem: {e}")
         return 1

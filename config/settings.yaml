@@ -67,6 +67,18 @@ ingest:
   excel_rows_per_section: 50
 
 # ---------------------------------------------------------------------
+#  Extraction (Claude reading each piece of the documents)
+# ---------------------------------------------------------------------
+extraction:
+  # How hard Claude thinks: low, medium, high. Higher is more thorough but
+  # costs more (thinking is charged like written output).
+  effort: medium
+  # Longest answer allowed from one call, in tokens (includes thinking).
+  max_output_tokens: 32000
+  # How many pieces are sent to Claude at the same time. More is faster.
+  parallel_requests: 4
+
+# ---------------------------------------------------------------------
 #  Cost estimate assumptions (used before a run starts, and in dry runs)
 #  Estimates deliberately err on the high side.
 # ---------------------------------------------------------------------
