@@ -42,6 +42,7 @@ def doc_with(text, locations=None):
     ("the obligation is fit-for-purpose", "spacing-tolerant"),             # broken word + kept hyphen
     ("is fit-for-purpose", "exact"),
     ("The Agreement was previously signed", "spacing-tolerant"),           # PDF spacing faults
+    ("Shall not be limited and the", "exact"),                              # first letter capitalised
 ])
 def test_quotes_that_verify(quote, method):
     d = doc_with("The Contractor’s total liability\nshall not be limited and the obliga-\ntion is fit-for-\n"
@@ -54,6 +55,7 @@ def test_quotes_that_verify(quote, method):
     ("The Contractor's total liability shall be limited", "not found"),   # one word changed
     ("The Contractor's total liability ... not limited", "'...'"),
     ("not limited", "too short"),
+    ("The Contractor's Total liability shall not be limited", "not found"), # case changed mid-quote
     ("", "no quote"),
 ])
 def test_quotes_that_fail(quote, reason):

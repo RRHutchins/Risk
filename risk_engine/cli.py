@@ -4,6 +4,8 @@
     python -m risk_engine ingest FOLDER      read and split documents, list the sections
     python -m risk_engine dry-run FOLDER     read documents and estimate cost (no API calls)
     python -m risk_engine extract FOLDER     find risks with Claude (spends API credit)
+    python -m risk_engine calculate RUN      merge duplicates, score, simulate contingency
+    python -m risk_engine review FOLDER      extract and calculate in one go
     python -m risk_engine ledger             show spending to date
 """
 
@@ -133,12 +135,19 @@ def cmd_dry_run(args, settings) -> int:
 
 
 def cmd_extract(args, settings) -> int:
+    r = _extract(args, settings)
+    return 0 if r and not r["summary"]["stopped_because"] else 1
+
+
+def _extract(args, settings, extra_usd: float = 0.0):
+    """Show the plan, confirm, and run extraction. Returns the result, or None."""
     from risk_engine.pipeline import plan_extraction, run_extraction
 
     folder = Path(args.folder)
     if not _folder_ok(folder):
-        return 1
+        return None
     plan = plan_extraction(folder, settings, pack_name=args.pack)
+    plan.estimate_usd += extra_usd
     print(LINE)
     print("EXTRACT RISKS WITH CLAUDE")
     print(LINE)
@@ -152,7 +161,7 @@ def cmd_extract(args, settings) -> int:
         print(f"  Not read: {s.name}: {s.reason}.")
     if not plan.chunks:
         print("\nThere is no readable text to review.")
-        return 1
+        return None
     print(f"\nThe text will be sent to Claude ({settings['models']['extraction']}) in {len(plan.chunks)} piece(s).")
     print(f"Estimated cost:     ${plan.estimate_usd:.2f}")
     print(f"Per-run cap:        ${plan.cap_usd:.2f}")
@@ -161,23 +170,23 @@ def cmd_extract(args, settings) -> int:
     if not plan.within_cap:
         print("\nSTOPPED: the estimate is over the per-run cap. Nothing has been sent.")
         print("To go ahead, raise per_run_cap_usd in config/settings.yaml, or review fewer documents.")
-        return 1
+        return None
     if not plan.within_budget:
         print("\nSTOPPED: this run could take you over your total budget. Nothing has been sent.")
         print("To go ahead, raise total_budget_usd in config/settings.yaml.")
-        return 1
+        return None
     if not api_key_present(settings):
         key_var = settings.get("api_key_env_var", "ANTHROPIC_API_KEY")
         print(f"\nSTOPPED: no API key found. Nothing has been sent.")
-        print(f"Set the {key_var} environment variable first; see 'Setting up your API key' in README.md.")
-        return 1
+        print(f"Set the {key_var} environment variable first; see Step 6 in README.md.")
+        return None
     print("\nDocument text is sent only to the Claude API (Anthropic). The run stops itself if it")
     print("would pass the per-run cap.")
     if not args.yes:
         answer = input("\nType yes and press Enter to start, or just press Enter to cancel: ").strip().lower()
         if answer not in ("yes", "y"):
             print("Cancelled. Nothing has been sent.")
-            return 0
+            return None
     print("\nWorking. Each piece usually takes under a minute.")
     r = run_extraction(plan, settings)
     s = r["summary"]
@@ -198,7 +207,85 @@ def cmd_extract(args, settings) -> int:
     print(f"\nRecords to check in Excel: {r['records_file']}")
     print(f"Audit file:                {r['audit_file']}")
     print(LINE)
-    return 0 if not s["stopped_because"] else 1
+    return r
+
+
+def _calculate(run_folder: Path, settings, contract_value, merge, already_spent_usd: float = 0.0) -> int:
+    from risk_engine.calc_pipeline import CalculationError, parse_money, run_calculation
+
+    try:
+        base = parse_money(contract_value)
+        if merge is not False and settings.get("merging", {}).get("enabled", True) and not api_key_present(settings):
+            print("Duplicate merging needs the API key (Step 6 in README.md).")
+            print("Set it up, or add --no-merge to calculate without merging.")
+            return 1
+        r = run_calculation(run_folder, settings, base, merge=merge, already_spent_usd=already_spent_usd)
+    except CalculationError as e:
+        print(f"Problem: {e}")
+        return 1
+    a = r["audit"]
+    res = a["result"]
+    cur = a.get("currency") or ""
+
+    def money(v):
+        return "" if v is None else f"  ({cur} {v:,.0f})"
+    print(LINE)
+    print("RISK CALCULATION")
+    print(LINE)
+    if a["base_value"] is None:
+        print("No contract value given, so figures are shown as % of contract value only.")
+        print("Add --contract-value 2500000 (for example) to see money as well.")
+    else:
+        print(f"Contract value:           {cur} {a['base_value']:,.0f}")
+    if a["merging"].get("groups") is not None and a["merging"].get("note") != "duplicate merging switched off":
+        print(f"Records:                  {a['records_before_merging']} found, "
+              f"{a['records_after_merging']} after merging duplicates")
+    else:
+        print(f"Records:                  {a['records_before_merging']} (duplicate merging switched off)")
+    if a["excel_edits"]:
+        print(f"Your edits used:          {len(a['excel_edits'])} (from records.xlsx)")
+    print(f"Red / amber / green:      {res['ratings']['red']} / {res['ratings']['amber']} / {res['ratings']['green']}")
+    ev = res["expected_value"]
+    print(f"Expected value (net):     {ev['net_pct']:.2f}% of contract value{money(ev['net_money'])}")
+    print("Contingency (simulated):")
+    for name, v in res["contingency"].items():
+        label = "Mean" if name == "mean" else name
+        print(f"  {label:<6} {v['pct']:>7.2f}%{money(v['money'])}")
+    top = res["simulation"]["contributions"][:5]
+    if top:
+        print("Largest contributors to P80:")
+        for c in top:
+            print(f"  {c['id']}  {c['p80_contribution_pct']:>6.2f}%  {c['title'][:60]}")
+    print(f"\nResults in Excel: {r['workbook']}")
+    print(f"Audit file:       {r['audit_file']}")
+    print(LINE)
+    return 0
+
+
+def cmd_calculate(args, settings) -> int:
+    return _calculate(Path(args.run_folder), settings, args.contract_value, False if args.no_merge else None)
+
+
+def cmd_review(args, settings) -> int:
+    from risk_engine.costs import Usage, price_usage
+
+    from risk_engine.calc_pipeline import CalculationError, parse_money
+    try:
+        parse_money(args.contract_value)
+    except CalculationError as e:
+        print(f"Problem: {e}")
+        return 1
+    merge_on = not args.no_merge and settings.get("merging", {}).get("enabled", True)
+    extra = 0.0
+    if merge_on:  # a generous allowance for the one merging call
+        extra = price_usage(settings["models"]["classification"], Usage(input=30000, output=8000),
+                            settings["pricing"])
+    r = _extract(args, settings, extra_usd=extra)
+    if not r or r["summary"]["stopped_because"]:
+        return 1
+    print()
+    return _calculate(Path(r["out_dir"]), settings, args.contract_value, False if args.no_merge else None,
+                      already_spent_usd=r["summary"]["actual_usd"])
 
 
 def cmd_ledger(args, settings) -> int:
@@ -253,6 +340,18 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--pack", help="domain pack to use (default from settings)")
     e.add_argument("--yes", action="store_true", help="start without asking for confirmation")
 
+    c = sub.add_parser("calculate", help="merge duplicates, score and simulate contingency for an extract run")
+    c.add_argument("run_folder", help="the folder in 'outputs' made by the extract command")
+    c.add_argument("--contract-value", help="contract value, e.g. 2500000 or 2.5m")
+    c.add_argument("--no-merge", action="store_true", help="skip duplicate merging (no Claude call)")
+
+    v = sub.add_parser("review", help="extract and calculate in one go (spends API credit)")
+    v.add_argument("folder", help="folder containing the tender documents")
+    v.add_argument("--contract-value", help="contract value, e.g. 2500000 or 2.5m")
+    v.add_argument("--pack", help="domain pack to use (default from settings)")
+    v.add_argument("--yes", action="store_true", help="start without asking for confirmation")
+    v.add_argument("--no-merge", action="store_true", help="skip duplicate merging")
+
     sub.add_parser("ledger", help="show spending to date")
     return p
 
@@ -262,7 +361,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings = load_settings(args.settings)
         return {"check": cmd_check, "ingest": cmd_ingest, "dry-run": cmd_dry_run,
-                "extract": cmd_extract, "ledger": cmd_ledger}[args.command](args, settings)
+                "extract": cmd_extract, "calculate": cmd_calculate,
+                "review": cmd_review, "ledger": cmd_ledger}[args.command](args, settings)
     except ConfigError as e:
         print(f"Setup problem: {e}")
         return 1

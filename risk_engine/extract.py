@@ -131,6 +131,27 @@ class ChunkResult:
     raw_answer: str = ""
 
 
+def call_claude(client, model: str, system: str, user: str, schema: dict, max_tokens: int, effort: str):
+    """One request with structured (JSON) output. The system text is marked for
+    caching. Streams the answer (needed for long answers) and returns the final
+    message, with the request id attached for the audit trail."""
+    with client.messages.stream(
+        model=model,
+        max_tokens=max_tokens,
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": user}],
+        output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
+    ) as stream:
+        message = stream.get_final_message()
+        request_id = getattr(stream, "request_id", None)
+    if request_id and not getattr(message, "_request_id", None):
+        try:
+            message._request_id = request_id
+        except (AttributeError, TypeError):
+            pass
+    return message
+
+
 def _usage_from(response) -> Usage:
     u = response.usage
     return Usage(input=u.input_tokens or 0,
@@ -241,22 +262,8 @@ class Extractor:
         self.progress(f"  piece {result.index + 1}: {chunk.doc} - {found} (${result.cost_usd:.4f})")
 
     def _call(self, chunk: Chunk):
-        with self.client.messages.stream(
-            model=self.model,
-            max_tokens=int(self.cfg.get("max_output_tokens", 32000)),
-            system=[{"type": "text", "text": self.system, "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": user_message(chunk)}],
-            output_config={"effort": self.cfg.get("effort", "medium"),
-                           "format": {"type": "json_schema", "schema": self.schema}},
-        ) as stream:
-            message = stream.get_final_message()
-            request_id = getattr(stream, "request_id", None)
-        if request_id and not getattr(message, "_request_id", None):
-            try:
-                message._request_id = request_id
-            except (AttributeError, TypeError):
-                pass
-        return message
+        return call_claude(self.client, self.model, self.system, user_message(chunk), self.schema,
+                           int(self.cfg.get("max_output_tokens", 32000)), self.cfg.get("effort", "medium"))
 
     def _read_answer(self, response, result: ChunkResult) -> None:
         stop = getattr(response, "stop_reason", None)

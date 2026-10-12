@@ -3,12 +3,13 @@
 This tool reads a construction tender pack and tells a contractor what risks they
 would be taking on, what to do about them, and how much contingency to price in.
 
-**Current status: Stage 3 of 9 (finding risks).** The tool reads a folder of tender
-documents, splits them into clauses with page references, and asks Claude to find
-the risks and answer the checklist. Every quote Claude gives is checked against the
-documents by the software; findings whose quote cannot be found are set aside.
-Scores, contingency, the Word report and the colour-coded register come in later
-stages.
+**Current status: Stage 4 of 9 (scores and contingency).** The tool reads a folder of
+tender documents, splits them into clauses with page references, and asks Claude to
+find the risks and answer the checklist. Every quote Claude gives is checked against
+the documents by the software; findings whose quote cannot be found are set aside.
+Duplicates are merged, then the software scores every risk (red, amber, green) and
+simulates how much contingency to price in (P50, P80, P90). The Word report, the
+opportunity finder and the bid / no-bid summary come in later stages.
 
 > Automated risk screening for review by a competent person. Not legal advice.
 
@@ -268,6 +269,72 @@ When it finishes, it saves a new folder in `outputs` containing:
 Likelihood and impact are Claude's judgements, given with reasons. Scores, money and
 contingency are calculated by the software in Stage 4.
 
+### Review a tender pack in one go (Stages 3 and 4; spends API credit)
+
+```
+python -m risk_engine review samples\demo_tender --contract-value 2500000
+```
+(On a Mac, use `/` instead of `\`.) The contract value can be written as `2500000`,
+`2,500,000`, `2.5m` or `750k`. Leave it out to see percentages only.
+
+This does everything in the two sections above and below in one run: it shows the
+estimate and asks you to confirm, finds the risks, merges duplicates, and works out
+scores and contingency. The per-run cap covers the whole run.
+
+### Work out scores and contingency (Stage 4)
+
+If you have already run `extract`, you can calculate (or recalculate) from its results
+without reading the documents again:
+
+```
+python -m risk_engine calculate "outputs\<the run folder>" --contract-value 2500000
+```
+Tip: type the start of the command, then drag the run folder from `outputs` into the
+window. This makes one small call to Claude to merge duplicates (usually under $0.05).
+Add `--no-merge` to skip that and spend nothing.
+
+**Changing Claude's judgements.** Open `records.xlsx` in the run folder, and in the
+**Risk records** sheet change any of: *Likelihood (1-5)*, *Impact min %*, *Impact
+likely %*, *Impact max %*, *Correlation group*. To leave a risk out, delete its row.
+Save, close Excel, and run `calculate` again. Your changes are used and listed in the
+results under **Your edits**. Every calculation is saved in a new folder, so earlier
+results are never overwritten. The same records always give exactly the same numbers.
+
+**What you get** (`risk_calculation.xlsx`, in a new folder inside the run folder):
+
+| Sheet | What it shows |
+|---|---|
+| Summary | Red / amber / green counts, expected value, and contingency at P10, P50, P80, P90 and the mean, as % of contract value and in money. Simulation settings. |
+| Register | Every risk, red first, with its rating colour, score, probability, impact range, expected value, flags and all its sources. |
+| Top contributors | The risks that drive the P80 contingency most, with a bar chart (the "tornado"). |
+| Cumulative curve | The chance that the net risk cost stays at or below each value, with a chart. Read P80 as: "an 80% chance the risk cost is no more than this". |
+| Merging | Which records were merged as duplicates, and any groupings refused by the software. |
+| Your edits | Changes taken from `records.xlsx`. |
+
+**How the numbers are worked out** (all by the software, never by Claude):
+- **Score** = likelihood score x impact score (impact score from the *most likely*
+  impact, using the bands in the pack). Red 15 and above, amber 8 to 14, green 7 and
+  below. Any uncapped liability or uncapped delay damages is red whatever its score.
+- **Probability** used in the simulation is the middle of each likelihood band
+  (for example "Possible", 15 to 35%, uses 25%).
+- **Expected value** = probability x most likely impact, added up, with opportunities
+  counted as savings.
+- **Simulation**: 10,000 runs. In each, every risk happens or not according to its
+  probability, and if it happens its cost is drawn from its minimum / most likely /
+  maximum range (a PERT curve). Risks with the same correlation group tend to happen
+  together and be large together (correlation 0.5). Opportunities reduce the total.
+  The random seed is fixed, so the same inputs always give the same answer.
+- The **simulated mean** is usually higher than the expected value, because the
+  simulation uses the whole impact range while the expected value uses only the most
+  likely figure.
+- **Duplicate merging**: Claude suggests which records describe the same risk; the
+  software checks each suggestion (same type, no record used twice) and keeps the
+  numbers of the strongest record, with every source quote.
+
+All of these settings (iterations, seed, PERT or triangular, correlation, percentiles,
+scales and thresholds) can be changed in `config/settings.yaml` and the pack's
+`pack.yaml`.
+
 ### See your spending to date
 
 ```
@@ -329,6 +396,9 @@ On a Mac, if TextEdit shows formatting options, choose **Format > Make Plain Tex
 | `The API key was rejected` | The key was mistyped or has been deleted. Create a new one (Step 6). |
 | `Your Anthropic credit balance is too low` | Add credit at console.anthropic.com under Settings > Billing. |
 | `STOPPED: the estimate is over the per-run cap` | Raise `per_run_cap_usd` in `config/settings.yaml`, or run on fewer documents. |
+| `impacts must be in order` (after editing records.xlsx) | On the row named, make sure Impact min % <= Impact likely % <= Impact max %. |
+| `No extraction results in ...` | Give `calculate` the run folder made by `extract` (inside `outputs`), not the tender folder. |
+| `Duplicate merging needs the API key` | Do Step 6, or add `--no-merge`. |
 | A piece is marked `refused` or `too_long` | That part of the documents was not reviewed. Check it by hand. For `too_long`, lowering `max_chunk_tokens` in the settings sends smaller pieces. |
 | A document shows "probably a scanned PDF" | That PDF is an image with no text. It cannot be reviewed until it is converted with OCR software. |
 

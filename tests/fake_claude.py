@@ -41,8 +41,8 @@ class FakeClaude:
 
     def _stream(self, **request):
         self.calls.append(request)
-        doc = re.search(r"Document: (.+)", request["messages"][0]["content"]).group(1)
-        return _Stream(self._answers(doc, request))
+        found = re.search(r"Document: (.+)", request["messages"][0]["content"])
+        return _Stream(self._answers(found.group(1) if found else None, request))
 
 
 def record(**overrides):

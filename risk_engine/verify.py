@@ -7,6 +7,7 @@ Matching tolerates differences that are not differences of wording:
   - spacing and line breaks ("liability   shall" = "liability shall")
   - curly versus straight quotation marks and apostrophes, and dash styles
   - words broken across lines with a hyphen ("obliga-" / "tion")
+  - the case of the first letter only ("If the ..." for "... if the ...")
   - spaces wrongly inserted inside words by PDF text extraction
     ("previo usly", "A greement"), and hyphens; reported as a
     spacing-tolerant match
@@ -110,6 +111,8 @@ def find_quote(quote: str, doc: Document) -> QuoteMatch:
         hay, index = _normalise_with_map(full, drop, join)
         needle = normalise(quote, drop, join)
         at = hay.find(needle)
+        if at < 0 and needle[:1].isalpha():
+            at = hay.find(needle[:1].swapcase() + needle[1:])
         if at < 0:
             continue
         original = index[at]

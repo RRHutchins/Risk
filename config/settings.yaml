@@ -79,6 +79,14 @@ extraction:
   parallel_requests: 4
 
 # ---------------------------------------------------------------------
+#  Duplicate merging (one risk found in several places is counted once)
+# ---------------------------------------------------------------------
+merging:
+  # Set to false to skip merging (no Claude call; every record counted).
+  enabled: true
+  effort: medium
+
+# ---------------------------------------------------------------------
 #  Cost estimate assumptions (used before a run starts, and in dry runs)
 #  Estimates deliberately err on the high side.
 # ---------------------------------------------------------------------
