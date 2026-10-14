@@ -16,6 +16,12 @@ INK_2 = "#52514e"
 GRID = "#e4e3df"
 
 
+def _clean(title: str, limit: int = 40) -> str:
+    """Drop symbols fonts cannot draw (such as Word's private bullet characters)."""
+    text = " ".join("".join(ch for ch in title if not 0xE000 <= ord(ch) <= 0xF8FF).split())
+    return text if len(text) <= limit else text[: limit - 2].rstrip() + "..."
+
+
 def _setup():
     import matplotlib
     matplotlib.use("Agg")
@@ -94,8 +100,7 @@ def tornado(contributions: list[dict], base_value: float | None, currency_symbol
     plt = _setup()
     from matplotlib.patches import Patch
     conv, xlabel = _value_axis(base_value, currency_symbol)
-    labels = [f"{c['id']}  " + (c["title"] if len(c["title"]) <= 40 else c["title"][:38].rstrip() + "...")
-              for c in items][::-1]
+    labels = [f"{c['id']}  " + _clean(c["title"]) for c in items][::-1]
     values = [conv(c["p80_contribution_pct"]) for c in items][::-1]
     colours = [OPPORTUNITY if v < 0 else THREAT for v in values]
     fig, ax = plt.subplots(figsize=(6.3, 0.42 * len(items) + 1.2), dpi=200)

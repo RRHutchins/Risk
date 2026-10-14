@@ -8,6 +8,8 @@
     python -m risk_engine report CALC        write the Word report and Excel register
     python -m risk_engine review FOLDER      the whole review in one go: extract, calculate, report
     python -m risk_engine batch PARENT       review many packs unattended at half price
+    python -m risk_engine test-run PARENT    test many packs against the brief's targets
+    python -m risk_engine regression         re-run the fixed regression packs and compare
     python -m risk_engine web                open the local web page
     python -m risk_engine ledger             show spending to date
 """
@@ -15,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,7 +37,8 @@ def cmd_check(args, settings) -> int:
         print("  !! Python 3.10 or newer is needed.")
         ok = False
     for module, label in [("yaml", "PyYAML"), ("pypdf", "pypdf"), ("docx", "python-docx"),
-                          ("openpyxl", "openpyxl"), ("anthropic", "anthropic")]:
+                          ("openpyxl", "openpyxl"), ("anthropic", "anthropic"),
+                          ("numpy", "numpy"), ("matplotlib", "matplotlib"), ("streamlit", "streamlit")]:
         try:
             __import__(module)
             print(f"  {label:<24} installed")
@@ -54,7 +58,7 @@ def cmd_check(args, settings) -> int:
     if api_key_present(settings):
         print(f"  API key ({key_var}) ... found")
     else:
-        print(f"  API key ({key_var}) ... not set (needed for 'extract'; see README)")
+        print(f"  API key ({key_var}) ... not set (needed for reviews; see README Step 6)")
     print()
     print("All good." if ok else "Some problems were found; see above.")
     return 0 if ok else 1
@@ -349,19 +353,41 @@ def cmd_review(args, settings) -> int:
 
 
 def cmd_batch(args, settings) -> int:
-    from risk_engine.batch import BatchError, plan_batch, read_values, submit
-
     parent = Path(args.parent)
     if not _folder_ok(parent):
         return 1
+    return _batch(parent, args, settings, "BATCH REVIEW (half-price, unattended)")
+
+
+def cmd_test_run(args, settings) -> int:
+    parent = Path(args.parent)
+    if not _folder_ok(parent):
+        return 1
+    label = args.label or f"test {datetime.now():%Y-%m-%d %H:%M}"
+    return _batch(parent, args, settings, "TEST RUN (batch, half-price)", test_label=label)
+
+
+def cmd_regression(args, settings) -> int:
+    folders = [Path(f) for f in settings.get("testing", {}).get("regression_packs", [])]
+    if not folders:
+        print("No regression packs are set. List the three fixed pack folders under")
+        print("testing: regression_packs in config/settings.yaml.")
+        return 1
+    label = args.label or f"regression {datetime.now():%Y-%m-%d %H:%M}"
+    return _batch(folders, args, settings, "REGRESSION RUN (the fixed packs)", test_label=label)
+
+
+def _batch(parent, args, settings, title: str, test_label: str | None = None) -> int:
+    from risk_engine.batch import BatchError, plan_batch, read_values, submit
+
     try:
-        values = read_values(Path(args.values)) if args.values else {}
-        packs = plan_batch(parent, settings, values, args.pack)
+        values = read_values(Path(args.values)) if getattr(args, "values", None) else {}
+        packs = plan_batch(parent, settings, values, getattr(args, "pack", None))
     except BatchError as e:
         print(f"Problem: {e}")
         return 1
     print(LINE)
-    print("BATCH REVIEW (half-price, unattended)")
+    print(title)
     print(LINE)
     total = 0.0
     for p in packs:
@@ -392,7 +418,8 @@ def cmd_batch(args, settings) -> int:
     from risk_engine.pipeline import make_client
     client = make_client(settings)
     try:
-        job_dir = submit(packs, settings, client, parent, use_claude=not args.no_claude, merge=not args.no_merge)
+        job_dir = submit(packs, settings, client, parent, use_claude=not getattr(args, "no_claude", False),
+                         merge=not getattr(args, "no_merge", False), test_label=test_label)
     except BatchError as e:
         print(f"Problem: {e}")
         return 1
@@ -417,8 +444,32 @@ def _batch_finish(job_dir: Path, settings, client) -> int:
     summary = collect(job_dir, settings, client)
     print(LINE)
     print(f"Summary of every pack (opens in Excel): {summary}")
+    job = json.loads((Path(job_dir) / "job.json").read_text(encoding="utf-8"))
+    if job.get("test_label"):
+        _print_test_results(summary, settings, job["test_label"])
     print(LINE)
     return 0
+
+
+def _print_test_results(summary: Path, settings, label: str) -> None:
+    from risk_engine.testing import compare, previous_results, record_results
+    from risk_engine.testing import results_file as results_path
+
+    previous = previous_results(results_path(settings))   # read before adding this run
+    rows, results_file = record_results(summary, settings, label)
+    print(f"\nTest results ({label}) - targets from the build brief:")
+    print(f"  {'Pack':<28} {'Quotes':>7} {'Check':>6} {'Figures':>8} {'Cost':>6}   Overall")
+    for r in rows:
+        share = r["quotes_verified_share"]
+        share = f"{float(share):.0%}" if share not in ("", None) else "-"
+        print(f"  {r['pack'][:28]:<28} {share:>7} {r['target_checklist']:>6} {r['target_numbers']:>8} "
+              f"{r['target_cost']:>6}   {r['all_targets_met']}" + (f"  ({r['problem']})" if r["problem"] else ""))
+    met = sum(1 for r in rows if r["all_targets_met"] == "PASS")
+    print(f"  {met} of {len(rows)} packs met every target.")
+    print("\nChanges since each pack's previous run:")
+    for line in compare(rows, previous):
+        print(f"  {line}")
+    print(f"\nAll test results so far (opens in Excel): {results_file}")
 
 
 def cmd_batch_resume(args, settings) -> int:
@@ -502,7 +553,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="the base value impacts are measured against (for a tender, the contract value), e.g. 2.5m")
     c.add_argument("--no-merge", action="store_true", help="skip duplicate merging (no Claude call)")
 
-    v = sub.add_parser("review", help="extract and calculate in one go (spends API credit)")
+    v = sub.add_parser("review", help="the whole review: extract, calculate and report (spends API credit)")
     v.add_argument("folder", help="folder containing the documents")
     v.add_argument("--value", "--contract-value", dest="contract_value",
                    help="the base value impacts are measured against (for a tender, the contract value), e.g. 2.5m")
@@ -527,6 +578,16 @@ def build_parser() -> argparse.ArgumentParser:
     br = sub.add_parser("batch-resume", help="pick up a batch after the window was closed")
     br.add_argument("job_folder", help="the batch job folder named when the batch was sent")
 
+    t = sub.add_parser("test-run", help="test many packs (batch) and check them against the brief's targets")
+    t.add_argument("parent", help="a folder containing one sub-folder per test pack")
+    t.add_argument("--values", help="CSV file: pack folder name, value")
+    t.add_argument("--label", help="a name for this test run, e.g. 'after prompt change 3'")
+    t.add_argument("--pack", help="domain pack to use (default from settings)")
+    t.add_argument("--yes", action="store_true", help="send without asking for confirmation")
+    rg = sub.add_parser("regression", help="re-run the three fixed regression packs and compare")
+    rg.add_argument("--label", help="a name for this run, e.g. 'after prompt change 3'")
+    rg.add_argument("--yes", action="store_true", help="send without asking for confirmation")
+
     sub.add_parser("web", help="open the local web page")
     sub.add_parser("ledger", help="show spending to date")
     return p
@@ -539,7 +600,8 @@ def main(argv: list[str] | None = None) -> int:
         return {"check": cmd_check, "ingest": cmd_ingest, "dry-run": cmd_dry_run,
                 "extract": cmd_extract, "calculate": cmd_calculate,
                 "review": cmd_review, "report": cmd_report, "batch": cmd_batch,
-                "batch-resume": cmd_batch_resume, "web": cmd_web, "ledger": cmd_ledger}[args.command](args, settings)
+                "batch-resume": cmd_batch_resume, "test-run": cmd_test_run,
+                "regression": cmd_regression, "web": cmd_web, "ledger": cmd_ledger}[args.command](args, settings)
     except ConfigError as e:
         print(f"Setup problem: {e}")
         return 1

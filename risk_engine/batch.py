@@ -60,11 +60,21 @@ def read_values(path: Path | None) -> dict[str, float]:
     return values
 
 
-def plan_batch(parent: Path, settings: dict, values: dict[str, float], pack_name: str | None = None) -> list[PackPlan]:
+def pack_folders(parent: Path) -> list[Path]:
     parent = Path(parent).resolve()
     folders = sorted(p for p in parent.iterdir() if p.is_dir() and not p.name.startswith("."))
     if not folders:
         raise BatchError(f"No pack folders found in {parent}. Put each document pack in its own folder inside it.")
+    return folders
+
+
+def plan_batch(parent: Path | list[Path], settings: dict, values: dict[str, float],
+               pack_name: str | None = None) -> list[PackPlan]:
+    """Plan every pack: the sub-folders of a parent folder, or a list of folders."""
+    folders = [Path(f).resolve() for f in parent] if isinstance(parent, list) else pack_folders(parent)
+    missing = [str(f) for f in folders if not f.is_dir()]
+    if missing:
+        raise BatchError("Folder(s) not found: " + "; ".join(missing))
     packs = []
     for folder in folders:
         plan = plan_extraction(folder, settings, pack_name, batch=True)
@@ -89,7 +99,8 @@ def _fingerprint(plan: Plan) -> str:
     return h.hexdigest()
 
 
-def submit(packs: list[PackPlan], settings: dict, client, parent: Path, use_claude: bool, merge: bool) -> Path:
+def submit(packs: list[PackPlan], settings: dict, client, parent, use_claude: bool, merge: bool,
+           test_label: str | None = None) -> Path:
     """Send every pack's extraction requests as one batch; save the job file."""
     to_send = [(i, p) for i, p in enumerate(packs) if not p.problem]
     if not to_send:
@@ -112,9 +123,9 @@ def submit(packs: list[PackPlan], settings: dict, client, parent: Path, use_clau
     batch = client.messages.batches.create(requests=requests)
     job_id, job_dir = create_run_folder(resolve_path(settings.get("output_folder", "outputs")), Path("batch"))
     job = {
-        "job_id": job_id, "batch_id": batch.id, "model": model, "parent": str(Path(parent).resolve()),
+        "job_id": job_id, "batch_id": batch.id, "model": model, "parent": str(parent),
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "use_claude": use_claude, "merge": merge, "requests": len(requests),
+        "use_claude": use_claude, "merge": merge, "requests": len(requests), "test_label": test_label,
         "packs": [{"index": i, "name": p.name, "folder": str(p.plan.folder), "base_value": p.base_value,
                    "pack": p.plan.pack.name, "chunks": len(p.plan.chunks), "fingerprint": _fingerprint(p.plan),
                    "estimate_usd": round(p.plan.estimate_usd, 6), "problem": p.problem}
@@ -193,6 +204,12 @@ def collect(job_dir: Path, settings: dict, client, progress=print) -> Path:
                              already_spent_usd=s["actual_usd"] + calc["audit"]["cost_usd"], progress=lambda m: None)
             b = rep["bundle"]
             c = b["calculation"]["result"]["contingency"]
+            checklist = b["extraction"]["checklist"]
+            row.update({"pieces_not_reviewed": s["pieces_not_reviewed"],
+                        "checklist_items": len(checklist),
+                        "checklist_all_reported": all(item["status"] for item in checklist),
+                        "figures_removed": len(b["synthesis"].get("removed_figures") or []),
+                        "pack_type": b["pack"], "audit": rep["audit"]})
             row.update({"red": b["calculation"]["result"]["ratings"]["red"], "P50_pct": round(c["P50"]["pct"], 3),
                         "P80_pct": round(c["P80"]["pct"], 3), "indicator": b["synthesis"]["indicator"]["label"],
                         "total_usd": b["cost_usd"], "report": rep["report"]})
@@ -204,9 +221,10 @@ def collect(job_dir: Path, settings: dict, client, progress=print) -> Path:
         rows.append(row)
 
     summary = job_dir / "batch_summary.csv"
-    fields = ["pack", "documents", "pieces", "reviewed", "records", "excluded", "quotes_verified_share",
-              "checklist_answered", "red", "P50_pct", "P80_pct", "indicator", "extraction_usd", "total_usd",
-              "seconds", "problem", "report", "run_folder"]
+    fields = ["pack", "documents", "pieces", "reviewed", "pieces_not_reviewed", "records", "excluded",
+              "quotes_verified_share", "checklist_answered", "checklist_items", "checklist_all_reported",
+              "figures_removed", "red", "P50_pct", "P80_pct", "indicator", "extraction_usd", "total_usd",
+              "seconds", "problem", "pack_type", "report", "run_folder", "audit"]
     with open(summary, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         w.writeheader()

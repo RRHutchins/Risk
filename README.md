@@ -1,15 +1,19 @@
 # Tender Risk Reviewer (prototype)
 
 This tool reads a construction tender pack and tells a contractor what risks they
-would be taking on, what to do about them, and how much contingency to price in.
+would be taking on, what to do about them, and how much contingency to price in. It
+produces a Word report, a colour-coded Excel risk register and an audit file.
 
-**Current status: Stage 4 of 9 (scores and contingency).** The tool reads a folder of
-tender documents, splits them into clauses with page references, and asks Claude to
-find the risks and answer the checklist. Every quote Claude gives is checked against
-the documents by the software; findings whose quote cannot be found are set aside.
-Duplicates are merged, then the software scores every risk (red, amber, green) and
-simulates how much contingency to price in (P50, P80, P90). The Word report, the
-opportunity finder and the bid / no-bid summary come in later stages.
+**Status: all nine build stages are built and tested.** The first live run with your
+own API key is still the real acceptance test (see `BUILD_PLAN.md`).
+
+How it works, in one paragraph: the documents are split into clauses on your computer;
+Claude reads each piece and proposes risks, each with a word-for-word quote; the
+software checks every quote against the documents and throws out any it cannot find;
+duplicates are merged; the software then scores every risk, simulates how much
+contingency to price in (P50, P80, P90), and works out which mitigations give the best
+value; finally Claude writes a short bid / no-bid view in which **every figure is
+inserted by the software**, never typed by Claude.
 
 > Automated risk screening for review by a competent person. Not legal advice.
 
@@ -149,8 +153,10 @@ old line from the file `.zshrc` in your home folder).
 
 ## Part 2: Using the tool
 
-Only `extract` sends anything anywhere or costs anything. Everything else is free and
-stays on your computer.
+Only the web page's **Run** button and the `extract`, `review`, `batch` and `test-run`
+commands (plus `calculate` and `report` unless you add `--no-merge` / `--no-claude`)
+send anything anywhere or cost anything. Everything else is free and stays on your
+computer.
 
 ### Every time you start
 
@@ -158,6 +164,64 @@ Open a command window in the `Risk` folder (Step 3 above), then switch the works
 
 - Windows: `.venv\Scripts\activate`
 - Mac: `source .venv/bin/activate`
+
+### The easy way: the web page
+
+```
+python -m risk_engine web
+```
+Your browser opens a page (if it does not, go to <http://localhost:8501>). Keep the
+command window open while you use it; close it to stop. The page only runs on your
+computer.
+
+1. Drag the folder of tender documents onto the box (or type the folder's path).
+2. Type the contract value, for example `2.5m`.
+3. Click **Check documents and estimate cost**. You see every document read, any
+   warnings, the estimated cost, your cap and your remaining budget. Nothing has been
+   sent yet.
+4. Click **Run the review**. Progress is shown as it works (usually a few minutes).
+5. Read the summary on the page, and download the **Word report**, the **Excel
+   register** and the **audit file**.
+
+The settings on the left let you choose the domain pack, and switch off duplicate
+merging or the written summary.
+
+### The whole review from the command window
+
+```
+python -m risk_engine review samples\demo_tender --value 2.5m
+```
+(On a Mac, use `/` instead of `\`.) The value can be written as `2500000`, `2,500,000`,
+`2.5m` or `750k` (`--contract-value` also works). Leave it out to see percentages only.
+
+It shows the estimate, asks you to confirm, then finds the risks, merges duplicates,
+calculates scores and contingency, finds mitigations and opportunities, and writes the
+report. The per-run cap covers the whole run. Add `--no-claude` to skip the opportunity
+finder and written summary, or `--no-merge` to skip duplicate merging.
+
+**What you get** (in a folder inside `outputs`, named on screen):
+
+| File | What it is |
+|---|---|
+| `Risk report - ... .docx` | **The report.** In this order: one-page summary (bid / no-bid view, top five risks, contingency at P50 and P80, actions); checklist results; colour-coded risk register; opportunities, cheap mitigations and suggested qualifications; clarification questions; contingency analysis with charts and assumptions; method and limitations; appendix of every source quote. Every page footer says it is a draft for review and not legal advice. |
+| `Risk register - ... .xlsx` | The register (one row per risk, filterable, colour-coded) with the checklist, mitigations, asymmetries, clarifications, qualifications, contributors and the cumulative curve. |
+| `run_audit - ... .json` | Everything needed to reproduce and check the run: every finding and quote check, every calculation, the exact instructions sent to Claude, the models, and the cost of each call. |
+
+**About the bid / no-bid view.** The software works out a rule-based indicator from
+the rules in the pack (for example "any red risk means bid with qualifications"; the
+rules are in `pack.yaml` under `decision`). Claude writes a view and the reasons. If the
+two differ, the report says so. Claude never writes a number: it writes placeholders
+such as `{P80_MONEY}`, which the software fills in, and any other figure is removed
+(the method section says how many were removed).
+
+**About mitigations.** For each suggested action Claude judges what it would cost and
+how much risk would remain; the software works out the expected loss it removes and the
+value ratio (loss removed / cost), ranks them, and marks them "cheap" when the ratio is
+at least 3 (adjustable in `pack.yaml`).
+
+### Step by step (for checking each stage)
+
+The rest of this part covers the individual steps that `review` runs for you.
 
 ### Check how the documents were split (Stage 2)
 
@@ -269,25 +333,13 @@ When it finishes, it saves a new folder in `outputs` containing:
 Likelihood and impact are Claude's judgements, given with reasons. Scores, money and
 contingency are calculated by the software in Stage 4.
 
-### Review a tender pack in one go (Stages 3 and 4; spends API credit)
-
-```
-python -m risk_engine review samples\demo_tender --contract-value 2500000
-```
-(On a Mac, use `/` instead of `\`.) The contract value can be written as `2500000`,
-`2,500,000`, `2.5m` or `750k`. Leave it out to see percentages only.
-
-This does everything in the two sections above and below in one run: it shows the
-estimate and asks you to confirm, finds the risks, merges duplicates, and works out
-scores and contingency. The per-run cap covers the whole run.
-
 ### Work out scores and contingency (Stage 4)
 
 If you have already run `extract`, you can calculate (or recalculate) from its results
 without reading the documents again:
 
 ```
-python -m risk_engine calculate "outputs\<the run folder>" --contract-value 2500000
+python -m risk_engine calculate "outputs\<the run folder>" --value 2.5m
 ```
 Tip: type the start of the command, then drag the run folder from `outputs` into the
 window. This makes one small call to Claude to merge duplicates (usually under $0.05).
@@ -335,6 +387,67 @@ All of these settings (iterations, seed, PERT or triangular, correlation, percen
 scales and thresholds) can be changed in `config/settings.yaml` and the pack's
 `pack.yaml`.
 
+### Write the report (Stages 5 and 6)
+
+```
+python -m risk_engine report "<the calculation folder>"
+```
+Give it the calculation folder made by `calculate` (inside the run folder). This finds
+mitigations and opportunities and writes the summary (two calls to Claude, usually
+well under $1), then writes the Word report, Excel register and audit file. Add
+`--no-claude` to write the report from the calculations alone, at no cost.
+
+So after editing figures in `records.xlsx`, the cheapest way to an updated report is:
+`calculate` (with `--no-merge` if you like), then `report` on the new calculation folder.
+
+### Many packs, unattended, at half price (batch mode)
+
+Put each tender pack in its own folder inside one parent folder, then:
+```
+python -m risk_engine batch "C:\Tenders\To review" --values values.csv
+```
+`values.csv` is optional: one line per pack, the pack folder's name then its value,
+for example `Riverside Bridge,2.5m` (make it in Excel and save as CSV).
+
+The tool checks every pack's estimate against the per-run cap and the total against
+your budget **before** sending, because a batch cannot be stopped part-way. Packs over
+the cap are listed and skipped. Anthropic usually finishes within an hour (at most 24
+hours). You can close the window: the batch keeps running, and you pick it up with
+```
+python -m risk_engine batch-resume "<the job folder named on screen>"
+```
+Each pack then gets its usual report, and `batch_summary.csv` (opens in Excel) lists
+every pack with its findings, quotes verified, contingency, indicator and cost.
+
+### Testing and tuning (Stage 8)
+
+The build brief asks for 30 to 50 public tender packs to be run, recording for each the
+number of findings, share of quotes verified, checklist items answered, cost and time,
+against these targets: at least 98% of quotes verified; every checklist item answered
+or reported as not found; no figure in a report that the software did not calculate;
+a typical pack under $2.
+
+1. Download tender packs from **Find a Tender** (<https://www.find-tender.service.gov.uk>)
+   and **Contracts Finder** (<https://www.contractsfinder.service.gov.uk>). Put each in
+   its own folder inside one parent folder.
+2. Run them as a test (batch prices):
+   ```
+   python -m risk_engine test-run "C:\Tenders\Test set" --label "first test"
+   ```
+3. At the end you see each pack marked PASS or FAIL against each target, and every
+   result is added to `ledger/test_results.csv` (opens in Excel), with a short code for
+   the version of the pack's instructions used, so you can compare before and after a
+   change.
+
+**Regression set.** Pick three packs to keep as a fixed check. List their folders in
+`config/settings.yaml` under `testing: regression_packs`. After every change to the
+instructions in a pack, run:
+```
+python -m risk_engine regression --label "after changing extract_prompt"
+```
+It shows, for each pack, what changed since its previous run (findings, quotes
+verified, red risks, P80, cost, indicator).
+
 ### See your spending to date
 
 ```
@@ -353,10 +466,14 @@ local time. The ledger file itself (`ledger/spend_ledger.csv`) records times in 
 | Folder or file | What it is |
 |---|---|
 | `config/settings.yaml` | **The settings you can change**: models, prices, spending cap, how hard Claude thinks, simulation settings. Every line is explained. |
-| `packs/construction_tender/` | The construction tender "domain pack": risk categories, scales, checklist, worked examples, and the instructions given to Claude (`extract_prompt.md`, in plain English). Edit these to change what the tool looks for. |
+| `packs/construction_tender/` | The construction tender "domain pack": risk categories, scales, rating thresholds, checklist, worked examples, decision rules, report wording, and the instructions given to Claude (`extract_prompt.md`, `opportunity_prompt.md`, `synth_prompt.md`, all in plain English). Edit these to change what the tool looks for. |
+| `packs/generic_iso31000/` | A minimal general-purpose pack (ISO 31000) that proves the engine works for other kinds of risk, and a template for new packs. |
 | `samples/demo_tender/` | A small, made-up tender pack for testing. |
+| `samples/generic_demo/` | A small, made-up business plan for trying the generic pack. |
+| `BUILD_PLAN.md` | Where each build stage stands, and the decisions made along the way. |
 | `outputs/` | Results of each run, one folder per run, including the sections list and the audit file. Each folder is named with the date, the time and a short random code, so no run ever overwrites another. Stays on your computer. |
 | `ledger/spend_ledger.csv` | The running record of every run and every dollar spent. Opens in Excel. Stays on your computer. |
+| `ledger/test_results.csv` | Every test and regression run, with PASS / FAIL against the brief's targets. |
 | `risk_engine/` | The program itself. You never need to edit this. |
 | `tests/` | Automatic checks that the calculations are right. |
 
@@ -369,13 +486,31 @@ save. For example, to raise the per-run cap to $5, change `per_run_cap_usd: 3.00
 
 On a Mac, if TextEdit shows formatting options, choose **Format > Make Plain Text** before saving.
 
+### Adding a new kind of risk review (a new domain pack)
+
+No programming is needed. Copy the folder `packs/generic_iso31000`, rename the copy
+(for example `packs/hse_review`), and edit its files in Notepad or TextEdit:
+
+| File | What to put in it |
+|---|---|
+| `pack.yaml` | The name (must match the folder name), risk categories, likelihood and impact scales, red / amber thresholds, flags that always mean red, allowed responses, decision options and rules, report wording. |
+| `extract_prompt.md` | Plain-English instructions for finding the risks. |
+| `opportunity_prompt.md` | Instructions for suggesting mitigations, opportunities, questions and conditions. |
+| `synth_prompt.md` | Instructions for the written summary. |
+| `checklist.yaml` | Questions every review must answer. |
+| `examples.json` | Five to ten worked example findings. |
+
+Then run `python -m risk_engine check` to see it listed, and use it with `--pack
+hse_review` on any command, or choose it on the web page.
+
 ---
 
 ## Your data and your API key
 
-- Documents are read on your own computer. Only the `extract` command sends document
-  text anywhere, and then only to the Claude API (Anthropic) for review. Nothing is
-  uploaded anywhere else.
+- Documents are read on your own computer. Document text is sent only to the Claude
+  API (Anthropic) for review, and only by the steps listed at the start of Part 2.
+  Nothing is uploaded anywhere else. Files dragged onto the web page are saved in
+  `outputs/uploads` on your computer.
 - The API key is read from an environment variable called `ANTHROPIC_API_KEY` (see
   Step 6). It is never written into any file in this project, the logs or the audit file.
 - `outputs/` and `ledger/` are excluded from GitHub, so your results stay private.
@@ -400,13 +535,19 @@ On a Mac, if TextEdit shows formatting options, choose **Format > Make Plain Tex
 | `No extraction results in ...` | Give `calculate` the run folder made by `extract` (inside `outputs`), not the tender folder. |
 | `Duplicate merging needs the API key` | Do Step 6, or add `--no-merge`. |
 | A piece is marked `refused` or `too_long` | That part of the documents was not reviewed. Check it by hand. For `too_long`, lowering `max_chunk_tokens` in the settings sends smaller pieces. |
+| `The opportunity finder and written summary need the API key` | Do Step 6, or add `--no-claude`. |
+| The web page does not open | Go to <http://localhost:8501> in your browser. If the command window shows an error about `streamlit`, run `pip install -r requirements.txt` again. |
+| The report says "the written view differs from the rule-based indicator" | Not an error: read both, and the reasons, before deciding. |
+| A batch is still running after you closed the window | Run `batch-resume` with the job folder shown when it was sent (it is inside `outputs`, named `..._batch`). |
 | A document shows "probably a scanned PDF" | That PDF is an image with no text. It cannot be reviewed until it is converted with OCR software. |
 
 ---
 
 ## For developers
 
-Run the automatic checks with `python -m pytest`. The demo pack is generated by
-`tools/make_demo_pack.py` (needs `reportlab`). The design is set out in the build brief:
-the engine is generic, and everything specific to construction tenders lives in
-`packs/construction_tender/`.
+Run the automatic checks with `python -m pytest` (about 150 tests, no API key
+needed: Claude and the batch service are simulated in `tests/fake_claude.py`, and one
+test drives the real SDK against a fake network connection). The demo pack is generated
+by `tools/make_demo_pack.py`. The engine is generic: everything specific to
+construction tenders lives in `packs/construction_tender/`, and the generic pack runs
+with no engine changes.

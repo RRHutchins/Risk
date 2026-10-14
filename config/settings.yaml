@@ -118,6 +118,21 @@ simulation:
   percentiles: [10, 50, 80, 90]
 
 # ---------------------------------------------------------------------
+#  Testing (Stage 8)
+# ---------------------------------------------------------------------
+testing:
+  # Every test run is added to this file (opens in Excel).
+  results_file: ledger/test_results.csv
+  # Targets from the build brief.
+  targets:
+    quotes_verified_share_min: 0.98
+    cost_per_pack_max_usd: 2.00
+  # The fixed regression packs: full paths to three pack folders, re-run with
+  # "python -m risk_engine regression" after every prompt change. Example:
+  #   - C:/Tenders/Regression/Harrogate
+  regression_packs: []
+
+# ---------------------------------------------------------------------
 #  Where results are saved
 # ---------------------------------------------------------------------
 output_folder: outputs

@@ -43,6 +43,8 @@ def doc_with(text, locations=None):
     ("is fit-for-purpose", "exact"),
     ("The Agreement was previously signed", "spacing-tolerant"),           # PDF spacing faults
     ("Shall not be limited and the", "exact"),                              # first letter capitalised
+    ("[Z3 Ground conditions (page 1)]\nThe Contractor's total liability", "exact"),   # label copied in
+    ("conditions (page 1)]\nThe Contractor's total liability", "exact"),              # tail of a label
 ])
 def test_quotes_that_verify(quote, method):
     d = doc_with("The Contractor’s total liability\nshall not be limited and the obliga-\ntion is fit-for-\n"
@@ -253,3 +255,9 @@ def test_real_sdk_request_and_streamed_reply(settings):
     assert piece.status == "ok" and piece.request_id == "req_wire"
     assert piece.usage == {"input": 900, "cache_write": 3100, "cache_read": 0, "output": 1800}
     assert [x["id"] for x in r["records"]] == ["R001"]
+
+
+def test_dots_that_are_in_the_document_are_allowed():
+    d = doc_with("Signature of\n\u2026\u2026\u2026\u2026\nDirector for and on behalf of the Supplier")
+    assert find_quote("Signature of \u2026\u2026\u2026\u2026 Director for and on behalf", d).verified
+    assert "'...'" in find_quote("Signature of ... on behalf of the Supplier", d).reason

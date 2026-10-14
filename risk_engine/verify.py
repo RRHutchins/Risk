@@ -8,6 +8,7 @@ Matching tolerates differences that are not differences of wording:
   - curly versus straight quotation marks and apostrophes, and dash styles
   - words broken across lines with a hyphen ("obliga-" / "tion")
   - the case of the first letter only ("If the ..." for "... if the ...")
+  - a stray copy of the tool's own reference label at the start of a quote
   - spaces wrongly inserted inside words by PDF text extraction
     ("previo usly", "A greement"), and hyphens; reported as a
     spacing-tolerant match
@@ -17,6 +18,7 @@ joining separate passages with "...", fails verification.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass
 
@@ -89,12 +91,21 @@ def normalise(text: str, drop_spaces: bool = False, join_hyphens: bool = True) -
     return _normalise_with_map(text, drop_spaces, join_hyphens)[0].strip()
 
 
+# A reference label the tool adds before each part of the text, e.g.
+# "[clause 4.2 in '4. PAYMENT' (page 16)]", or the tail of one. It is not part
+# of the document, so it is removed from a quote before checking.
+_LABEL = re.compile(r"^\s*\[?[^\[\]\n]{0,200}\((?:pages?|rows?|lines?) [^)\n]*\)\]\s*")
+
+
+def strip_reference_label(quote: str) -> str:
+    return _LABEL.sub("", quote or "", count=1)
+
+
 def find_quote(quote: str, doc: Document) -> QuoteMatch:
     """Look for a quote anywhere in one document."""
+    quote = strip_reference_label(quote)
     if not quote or not quote.strip():
         return QuoteMatch(False, reason="no quote given")
-    if "..." in quote or "\u2026" in quote:
-        return QuoteMatch(False, reason="quote joins separate passages with '...'")
     if len(normalise(quote)) < MIN_QUOTE_CHARS:
         return QuoteMatch(False, reason="quote too short to verify")
 
@@ -119,4 +130,8 @@ def find_quote(quote: str, doc: Document) -> QuoteMatch:
         k = max(i for i, st in enumerate(starts) if st <= original)
         section = doc.sections[k]
         return QuoteMatch(True, method, section, section.location_at(original - starts[k]))
+    if "..." in quote or "\u2026" in quote:
+        # Documents can contain dots themselves (signature lines); only a quote
+        # whose dots are not in the document has joined separate passages.
+        return QuoteMatch(False, reason="quote joins separate passages with '...'")
     return QuoteMatch(False, reason="quote not found in the document")
