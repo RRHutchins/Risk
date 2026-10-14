@@ -49,7 +49,7 @@ def extra_steps_estimate(settings: dict, merge: bool, use_claude: bool) -> float
 
 
 def main() -> None:
-    st.set_page_config(page_title="Tender Risk Reviewer", layout="wide")
+    st.set_page_config(page_title="Risk Reviewer", layout="wide")
     settings = load_settings()
     ledger = Ledger(resolve_path(settings["budget"]["ledger_file"]))
     spent = ledger.total_spent_usd()

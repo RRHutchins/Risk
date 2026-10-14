@@ -40,7 +40,7 @@ def parse_money(text: str | float | int | None) -> float | None:
     t = str(text).strip().lower().replace(",", "").replace("£", "").replace("$", "").replace("gbp", "").strip()
     m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(m|million|k|thousand|bn|billion)?", t)
     if not m:
-        raise CalculationError(f"'{text}' is not a contract value I can read. Try a number such as 2500000 or 2.5m.")
+        raise CalculationError(f"'{text}' is not a value I can read. Try a number such as 2500000 or 2.5m.")
     factor = {"m": 1e6, "million": 1e6, "k": 1e3, "thousand": 1e3, "bn": 1e9, "billion": 1e9}.get(m.group(2), 1)
     return float(m.group(1)) * factor
 

@@ -64,7 +64,7 @@ def plan_batch(parent: Path, settings: dict, values: dict[str, float], pack_name
     parent = Path(parent).resolve()
     folders = sorted(p for p in parent.iterdir() if p.is_dir() and not p.name.startswith("."))
     if not folders:
-        raise BatchError(f"No pack folders found in {parent}. Put each tender pack in its own folder inside it.")
+        raise BatchError(f"No pack folders found in {parent}. Put each document pack in its own folder inside it.")
     packs = []
     for folder in folders:
         plan = plan_extraction(folder, settings, pack_name, batch=True)

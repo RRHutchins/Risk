@@ -237,10 +237,11 @@ def _calculate(run_folder: Path, settings, contract_value, merge, already_spent_
     print("RISK CALCULATION")
     print(LINE)
     if a["base_value"] is None:
-        print("No contract value given, so figures are shown as % of contract value only.")
-        print("Add --contract-value 2500000 (for example) to see money as well.")
+        label = a.get("base_value_label", "Base value")
+        print(f"No {label.lower()} given, so figures are shown as % of {label.lower()} only.")
+        print("Add --value 2500000 (for example) to see money as well.")
     else:
-        print(f"Contract value:           {cur} {a['base_value']:,.0f}")
+        print(f"{a.get('base_value_label', 'Base value') + ':':<26}{cur} {a['base_value']:,.0f}")
     if a["merging"].get("groups") is not None and a["merging"].get("note") != "duplicate merging switched off":
         print(f"Records:                  {a['records_before_merging']} found, "
               f"{a['records_after_merging']} after merging duplicates")
@@ -250,7 +251,7 @@ def _calculate(run_folder: Path, settings, contract_value, merge, already_spent_
         print(f"Your edits used:          {len(a['excel_edits'])} (from records.xlsx)")
     print(f"Red / amber / green:      {res['ratings']['red']} / {res['ratings']['amber']} / {res['ratings']['green']}")
     ev = res["expected_value"]
-    print(f"Expected value (net):     {ev['net_pct']:.2f}% of contract value{money(ev['net_money'])}")
+    print(f"Expected value (net):     {ev['net_pct']:.2f}% of {a.get('base_value_label', 'base value').lower()}{money(ev['net_money'])}")
     print("Contingency (simulated):")
     for name, v in res["contingency"].items():
         label = "Mean" if name == "mean" else name
@@ -475,7 +476,7 @@ def _local_time(utc_text: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="python -m risk_engine", description="Tender Risk Reviewer")
+    p = argparse.ArgumentParser(prog="python -m risk_engine", description="Risk Reviewer (tender pack by default)")
     p.add_argument("--settings", help="use a different settings file (default: config/settings.yaml)")
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -486,23 +487,25 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--pack", help="domain pack to use (default from settings)")
 
     d = sub.add_parser("dry-run", help="read documents and estimate cost, without calling the API")
-    d.add_argument("folder", help="folder containing the tender documents")
+    d.add_argument("folder", help="folder containing the documents")
     d.add_argument("--pack", help="domain pack to use (default from settings)")
     d.add_argument("--batch", action="store_true", help="estimate using batch (unattended) pricing")
 
     e = sub.add_parser("extract", help="find risks with Claude (spends API credit)")
-    e.add_argument("folder", help="folder containing the tender documents")
+    e.add_argument("folder", help="folder containing the documents")
     e.add_argument("--pack", help="domain pack to use (default from settings)")
     e.add_argument("--yes", action="store_true", help="start without asking for confirmation")
 
     c = sub.add_parser("calculate", help="merge duplicates, score and simulate contingency for an extract run")
     c.add_argument("run_folder", help="the folder in 'outputs' made by the extract command")
-    c.add_argument("--contract-value", help="contract value, e.g. 2500000 or 2.5m")
+    c.add_argument("--value", "--contract-value", dest="contract_value",
+                   help="the base value impacts are measured against (for a tender, the contract value), e.g. 2.5m")
     c.add_argument("--no-merge", action="store_true", help="skip duplicate merging (no Claude call)")
 
     v = sub.add_parser("review", help="extract and calculate in one go (spends API credit)")
-    v.add_argument("folder", help="folder containing the tender documents")
-    v.add_argument("--contract-value", help="contract value, e.g. 2500000 or 2.5m")
+    v.add_argument("folder", help="folder containing the documents")
+    v.add_argument("--value", "--contract-value", dest="contract_value",
+                   help="the base value impacts are measured against (for a tender, the contract value), e.g. 2.5m")
     v.add_argument("--pack", help="domain pack to use (default from settings)")
     v.add_argument("--yes", action="store_true", help="start without asking for confirmation")
     v.add_argument("--no-merge", action="store_true", help="skip duplicate merging")
