@@ -376,3 +376,48 @@ def process_results(results: list[ChunkResult], docs: list[Document], pack: Pack
         checklist.append({"id": c["id"], "question": c["question"], "category": c.get("category"),
                           "status": status, "answers": verified or found})
     return {"records": accepted, "excluded": excluded, "checklist": checklist}
+
+
+def guarded_call(client, settings: dict, guard: CostGuard, ledger: Ledger, run_id: str, step: str,
+                 model: str, system: str, user: str, schema: dict, effort: str, expected_output_tokens: int,
+                 ledger_lock: threading.Lock | None = None) -> dict:
+    """One structured Claude call inside the spending controls.
+
+    Returns {"data": parsed JSON or None, "status", "message", "cost_usd", "usage",
+    "model", "request_id"}. Raises ExtractionStopped (plain English) for errors
+    that must stop the run, including reaching the per-run cap.
+    """
+    cpt = settings["estimate"]["chars_per_token"]
+    expected = price_usage(model, Usage(input=count_tokens_local(system + user, cpt),
+                                        output=expected_output_tokens), settings["pricing"])
+    try:
+        guard.reserve(expected)
+    except SpendCapExceeded as e:
+        raise ExtractionStopped(str(e)) from e
+    try:
+        response = call_claude(client, model, system, user, schema,
+                               int(settings.get("extraction", {}).get("max_output_tokens", 32000)), effort)
+    except Exception as e:
+        guard.release(expected)
+        raise ExtractionStopped(_plain_api_error(e) or f"Unexpected problem calling Claude: {e}") from e
+    usage = _usage_from(response)
+    cost = guard.record(model, usage, reserved_usd=expected)
+    request_id = getattr(response, "_request_id", "") or ""
+    lock = ledger_lock or threading.Lock()
+    with lock:
+        ledger.append(run_id, "live", step, model, usage, estimated_usd=expected, actual_usd=cost,
+                      note=f"request {request_id}")
+    out = {"data": None, "status": "ok", "message": "", "cost_usd": cost, "usage": asdict(usage),
+           "model": getattr(response, "model", model), "request_id": request_id}
+    if response.stop_reason == "refusal":
+        out.update(status="refused", message="Claude declined this step")
+        return out
+    text = next((b.text for b in response.content if getattr(b, "type", "") == "text"), "")
+    if response.stop_reason == "max_tokens":
+        out.update(status="too_long", message="the answer was cut off because it was too long")
+        return out
+    try:
+        out["data"] = json.loads(text)
+    except json.JSONDecodeError:
+        out.update(status="unreadable", message="the answer was not in the required format")
+    return out

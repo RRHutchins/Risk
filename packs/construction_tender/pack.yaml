@@ -24,7 +24,7 @@ objectives:
 # How impacts are expressed. The user enters the base value at run time.
 impact_basis:
   measure: share of contract value
-  base_value_label: Contract value (GBP)
+  base_value_label: Contract value
   currency: GBP
 
 # File types this pack expects to receive.
@@ -180,9 +180,66 @@ standard_forms:
   - name: ICC
     amendment_markers: ["Schedule of Amendments"]
 
+# ---------------------------------------------------------------------
+#  Opportunity finder (Stage 6)
+# ---------------------------------------------------------------------
+opportunity:
+  # A mitigation is "cheap" when the expected loss it removes is at least
+  # this many times its cost.
+  cheap_mitigation_ratio: 3
+  # An opportunity is an "asymmetry" when its upside is at least this many
+  # times its downside.
+  asymmetry_ratio: 3
+
+# ---------------------------------------------------------------------
+#  Decision summary (Stage 6)
+#  The software works out an indicator from these rules (checked from the
+#  top; the first that matches wins). Claude writes the reasoning; if its
+#  view differs from the indicator, the report says so.
+#  Measures you can use: p80_pct_at_least, p50_pct_at_least,
+#  red_count_at_least, amber_count_at_least, flag_present (a list),
+#  checklist_not_found_at_least.
+# ---------------------------------------------------------------------
+decision:
+  title: Bid / no-bid view
+  options:
+    - id: proceed
+      label: Bid
+    - id: conditional
+      label: Bid, with qualifications and clarifications
+    - id: decline
+      label: Do not bid
+  indicator_rules:
+    - option: decline
+      if_any:
+        p80_pct_at_least: 15
+        red_count_at_least: 8
+    - option: conditional
+      if_any:
+        red_count_at_least: 1
+        flag_present: [uncapped_liability, uncapped_delay_damages]
+        p80_pct_at_least: 5
+  default: proceed
+
+# ---------------------------------------------------------------------
+#  Report wording
+# ---------------------------------------------------------------------
+report:
+  title: Tender risk review
+  base_value_label: Contract value
+  footer: "Automated risk screening for review by a competent person. Not legal advice."
+  clarifications_heading: Clarification questions for the employer
+  qualifications_heading: Suggested tender qualifications
+  actions_heading: Actions before submitting the tender
+  method_notes:
+    - "Findings come from the tender documents only. The software has no knowledge of the bidder's own costs, programme or appetite for risk; impact ranges are typical values for work of this kind and should be replaced with the bidder's own estimates where available."
+    - "Where the documents use a standard form (NEC, JCT, FIDIC and similar), the review concentrates on the amendments. Unamended standard-form terms are not reviewed clause by clause."
+    - "The review does not give a legal opinion on whether any term is enforceable."
+
 # Files the engine reads from this folder.
 files:
   extract_prompt: extract_prompt.md
   synth_prompt: synth_prompt.md
+  opportunity_prompt: opportunity_prompt.md
   examples: examples.json
   checklist: checklist.yaml

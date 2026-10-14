@@ -5,7 +5,8 @@
     python -m risk_engine dry-run FOLDER     read documents and estimate cost (no API calls)
     python -m risk_engine extract FOLDER     find risks with Claude (spends API credit)
     python -m risk_engine calculate RUN      merge duplicates, score, simulate contingency
-    python -m risk_engine review FOLDER      extract and calculate in one go
+    python -m risk_engine report CALC        write the Word report and Excel register
+    python -m risk_engine review FOLDER      the whole review in one go: extract, calculate, report
     python -m risk_engine ledger             show spending to date
 """
 
@@ -210,7 +211,8 @@ def _extract(args, settings, extra_usd: float = 0.0):
     return r
 
 
-def _calculate(run_folder: Path, settings, contract_value, merge, already_spent_usd: float = 0.0) -> int:
+def _calculate(run_folder: Path, settings, contract_value, merge, already_spent_usd: float = 0.0):
+    """Run and print a calculation. Returns its result, or None if it failed."""
     from risk_engine.calc_pipeline import CalculationError, parse_money, run_calculation
 
     try:
@@ -218,11 +220,11 @@ def _calculate(run_folder: Path, settings, contract_value, merge, already_spent_
         if merge is not False and settings.get("merging", {}).get("enabled", True) and not api_key_present(settings):
             print("Duplicate merging needs the API key (Step 6 in README.md).")
             print("Set it up, or add --no-merge to calculate without merging.")
-            return 1
+            return None
         r = run_calculation(run_folder, settings, base, merge=merge, already_spent_usd=already_spent_usd)
     except CalculationError as e:
         print(f"Problem: {e}")
-        return 1
+        return None
     a = r["audit"]
     res = a["result"]
     cur = a.get("currency") or ""
@@ -259,11 +261,57 @@ def _calculate(run_folder: Path, settings, contract_value, merge, already_spent_
     print(f"\nResults in Excel: {r['workbook']}")
     print(f"Audit file:       {r['audit_file']}")
     print(LINE)
-    return 0
+    return r
 
 
 def cmd_calculate(args, settings) -> int:
-    return _calculate(Path(args.run_folder), settings, args.contract_value, False if args.no_merge else None)
+    r = _calculate(Path(args.run_folder), settings, args.contract_value, False if args.no_merge else None)
+    return 0 if r else 1
+
+
+def _report(calc_folder: Path, settings, use_claude: bool, already_spent_usd: float = 0.0) -> int:
+    from risk_engine.calc_pipeline import CalculationError
+    from risk_engine.report_pipeline import run_report
+
+    if use_claude and not api_key_present(settings):
+        print("The opportunity finder and written summary need the API key (Step 6 in README.md).")
+        print("Set it up, or add --no-claude to write the report without them.")
+        return 1
+    try:
+        r = run_report(calc_folder, settings, use_claude=use_claude, already_spent_usd=already_spent_usd)
+    except CalculationError as e:
+        print(f"Problem: {e}")
+        return 1
+    b = r["bundle"]
+    syn, opp = b["synthesis"], b["opportunity"]
+    print(LINE)
+    print("REPORT")
+    print(LINE)
+    ind = syn["indicator"]
+    print(f"Rule-based indicator:     {ind['label']}")
+    if syn.get("narrative"):
+        n = syn["narrative"]
+        print(f"Written view:             {n['recommendation_label']}"
+              + ("" if n["agrees_with_indicator"] else "  (DIFFERS from the indicator: review both)"))
+        print(f"  {n['headline']}")
+        if syn.get("removed_figures"):
+            print(f"Figures removed from the written view (not calculated by the software): {len(syn['removed_figures'])}")
+    elif use_claude:
+        print(f"Written view:             not produced ({syn.get('message', '')})")
+    print(f"Cheap mitigations:        {len(opp['cheap_mitigations'])} of {len(opp['mitigations'])} proposed")
+    print(f"Asymmetries:              {len(opp['asymmetries'])}")
+    print(f"Clarification questions:  {len(opp['clarifications'])}")
+    print(f"Qualifications:           {len(opp['qualifications'])}")
+    print(f"Total API cost of the run: ${b['cost_usd']:.4f}")
+    print(f"\nWord report:    {r['report']}")
+    print(f"Excel register: {r['register']}")
+    print(f"Audit file:     {r['audit']}")
+    print(LINE)
+    return 0
+
+
+def cmd_report(args, settings) -> int:
+    return _report(Path(args.calc_folder), settings, use_claude=not args.no_claude)
 
 
 def cmd_review(args, settings) -> int:
@@ -278,14 +326,23 @@ def cmd_review(args, settings) -> int:
     merge_on = not args.no_merge and settings.get("merging", {}).get("enabled", True)
     extra = 0.0
     if merge_on:  # a generous allowance for the one merging call
-        extra = price_usage(settings["models"]["classification"], Usage(input=30000, output=8000),
-                            settings["pricing"])
+        extra += price_usage(settings["models"]["classification"], Usage(input=30000, output=8000),
+                             settings["pricing"])
+    if not args.no_claude:  # opportunity finder and written summary
+        extra += price_usage(settings["models"]["classification"], Usage(input=30000, output=15000),
+                             settings["pricing"])
+        extra += price_usage(settings["models"]["synthesis"], Usage(input=25000, output=8000), settings["pricing"])
     r = _extract(args, settings, extra_usd=extra)
     if not r or r["summary"]["stopped_because"]:
         return 1
     print()
-    return _calculate(Path(r["out_dir"]), settings, args.contract_value, False if args.no_merge else None,
-                      already_spent_usd=r["summary"]["actual_usd"])
+    c = _calculate(Path(r["out_dir"]), settings, args.contract_value, False if args.no_merge else None,
+                   already_spent_usd=r["summary"]["actual_usd"])
+    if not c:
+        return 1
+    print()
+    spent = r["summary"]["actual_usd"] + c["audit"]["cost_usd"]
+    return _report(Path(c["out_dir"]), settings, use_claude=not args.no_claude, already_spent_usd=spent)
 
 
 def cmd_ledger(args, settings) -> int:
@@ -351,6 +408,13 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--pack", help="domain pack to use (default from settings)")
     v.add_argument("--yes", action="store_true", help="start without asking for confirmation")
     v.add_argument("--no-merge", action="store_true", help="skip duplicate merging")
+    v.add_argument("--no-claude", action="store_true",
+                   help="skip the opportunity finder and written summary (report from calculations only)")
+
+    rp = sub.add_parser("report", help="write the Word report and Excel register for a calculation")
+    rp.add_argument("calc_folder", help="the calculation folder made by 'calculate' (inside the run folder)")
+    rp.add_argument("--no-claude", action="store_true",
+                    help="skip the opportunity finder and written summary (no API cost)")
 
     sub.add_parser("ledger", help="show spending to date")
     return p
@@ -362,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
         settings = load_settings(args.settings)
         return {"check": cmd_check, "ingest": cmd_ingest, "dry-run": cmd_dry_run,
                 "extract": cmd_extract, "calculate": cmd_calculate,
-                "review": cmd_review, "ledger": cmd_ledger}[args.command](args, settings)
+                "review": cmd_review, "report": cmd_report, "ledger": cmd_ledger}[args.command](args, settings)
     except ConfigError as e:
         print(f"Setup problem: {e}")
         return 1

@@ -18,6 +18,7 @@ from risk_engine.config import PROJECT_ROOT, ConfigError
 PACKS_DIR = PROJECT_ROOT / "packs"
 REQUIRED_KEYS = ("name", "taxonomy", "likelihood_scale", "impact_scale", "rating", "files")
 REQUIRED_FILES = ("extract_prompt", "synth_prompt", "examples", "checklist")
+OPTIONAL_FILES = ("opportunity_prompt",)
 
 
 @dataclass
@@ -27,6 +28,7 @@ class Pack:
     config: dict
     extract_prompt: str
     synth_prompt: str
+    opportunity_prompt: str = ""
     examples: list = field(default_factory=list)
     checklist: list = field(default_factory=list)
 
@@ -37,6 +39,20 @@ class Pack:
     @property
     def accepted_file_types(self) -> list[str]:
         return [s.lower() for s in self.config.get("accepted_file_types", [])]
+
+    @property
+    def base_value_label(self) -> str:
+        return (self.config.get("report", {}).get("base_value_label")
+                or self.config.get("impact_basis", {}).get("base_value_label") or "Base value")
+
+    @property
+    def currency(self) -> str:
+        return self.config.get("impact_basis", {}).get("currency", "")
+
+    @property
+    def footer(self) -> str:
+        return self.config.get("report", {}).get(
+            "footer", "Automated risk screening for review by a competent person. Not legal advice.")
 
     @property
     def heading_patterns(self) -> list[str]:
@@ -84,6 +100,13 @@ def load_pack(name: str, packs_dir: Path | None = None) -> Pack:
             raise ConfigError(f"Pack '{name}' is missing its {key} file ({filename}).")
         paths[key] = folder / filename
 
+    for key in OPTIONAL_FILES:
+        filename = config["files"].get(key)
+        if filename and not (folder / filename).exists():
+            raise ConfigError(f"Pack '{name}' names a {key} file ({filename}) that is missing.")
+        if filename:
+            paths[key] = folder / filename
+
     with open(paths["examples"], encoding="utf-8") as f:
         examples = json.load(f).get("examples", [])
     with open(paths["checklist"], encoding="utf-8") as f:
@@ -108,6 +131,7 @@ def load_pack(name: str, packs_dir: Path | None = None) -> Pack:
         config=config,
         extract_prompt=paths["extract_prompt"].read_text(encoding="utf-8"),
         synth_prompt=paths["synth_prompt"].read_text(encoding="utf-8"),
+        opportunity_prompt=paths["opportunity_prompt"].read_text(encoding="utf-8") if "opportunity_prompt" in paths else "",
         examples=examples,
         checklist=checklist,
     )

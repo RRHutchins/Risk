@@ -18,8 +18,8 @@ from __future__ import annotations
 import json
 
 from risk_engine.calculate import probability
-from risk_engine.costs import CostGuard, Ledger, SpendCapExceeded, Usage, count_tokens_local, price_usage
-from risk_engine.extract import ExtractionStopped, _plain_api_error, _usage_from, call_claude
+from risk_engine.costs import CostGuard, Ledger
+from risk_engine.extract import guarded_call
 
 MERGE_RULES = """# Task
 
@@ -146,37 +146,13 @@ def propose_merges(records: list[dict], settings: dict, client, guard: CostGuard
                    run_id: str) -> dict:
     """Ask Claude for duplicate groups. Returns the raw proposal and the call's cost."""
     model = settings["models"]["classification"]
-    user = merge_request(records)
-    cpt = settings["estimate"]["chars_per_token"]
-    expected_out = 80 * len(records) + 2000
-    expected = price_usage(model, Usage(input=count_tokens_local(MERGE_RULES + user, cpt), output=expected_out),
-                           settings["pricing"])
-    try:
-        guard.reserve(expected)
-    except SpendCapExceeded as e:
-        raise ExtractionStopped(str(e)) from e
-    try:
-        response = call_claude(client, model, MERGE_RULES, user, merge_schema([r["id"] for r in records]),
-                               int(settings.get("extraction", {}).get("max_output_tokens", 32000)),
-                               settings.get("merging", {}).get("effort", "medium"))
-    except Exception as e:
-        guard.release(expected)
-        raise ExtractionStopped(_plain_api_error(e) or f"Unexpected problem calling Claude: {e}") from e
-    usage = _usage_from(response)
-    cost = guard.record(model, usage, reserved_usd=expected)
-    ledger.append(run_id, "live", "Duplicate merging", model, usage, estimated_usd=expected, actual_usd=cost,
-                  note=f"{len(records)} records; request {getattr(response, '_request_id', '')}")
-    if response.stop_reason == "refusal":
-        return {"groups": [], "cost_usd": cost, "note": "Claude declined; no records were merged"}
-    if response.stop_reason == "max_tokens":
-        return {"groups": [], "cost_usd": cost, "note": "the answer was cut off; no records were merged"}
-    text = next((b.text for b in response.content if getattr(b, "type", "") == "text"), "")
-    try:
-        groups = json.loads(text).get("groups", [])
-    except json.JSONDecodeError:
-        return {"groups": [], "cost_usd": cost, "note": "the answer was not in the required format; no records were merged"}
-    return {"groups": groups, "cost_usd": cost, "note": "", "model": model,
-            "request_id": getattr(response, "_request_id", ""), "usage": usage.__dict__}
+    call = guarded_call(client, settings, guard, ledger, run_id, "Duplicate merging", model, MERGE_RULES,
+                        merge_request(records), merge_schema([r["id"] for r in records]),
+                        settings.get("merging", {}).get("effort", "medium"), 80 * len(records) + 2000)
+    note = "" if call["status"] == "ok" else f"{call['message']}; no records were merged"
+    groups = (call["data"] or {}).get("groups", []) if call["status"] == "ok" else []
+    return {"groups": groups, "cost_usd": call["cost_usd"], "note": note, "model": call["model"],
+            "request_id": call["request_id"], "usage": call["usage"]}
 
 
 def merge_duplicates(records: list[dict], pack_config: dict, settings: dict, client, guard: CostGuard,
