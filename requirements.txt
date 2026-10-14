@@ -6,5 +6,6 @@ python-docx>=1.1.2     # reads Word files (and writes the report later)
 openpyxl>=3.1          # reads Excel files (and writes the register later)
 numpy>=1.26            # runs the Monte Carlo simulation
 matplotlib>=3.8        # draws the charts in the report
+streamlit>=1.50        # the local web page
 pytest>=8.0            # runs the automatic checks
 reportlab>=4.0         # makes test PDFs for the automatic checks

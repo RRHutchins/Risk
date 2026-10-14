@@ -7,6 +7,8 @@
     python -m risk_engine calculate RUN      merge duplicates, score, simulate contingency
     python -m risk_engine report CALC        write the Word report and Excel register
     python -m risk_engine review FOLDER      the whole review in one go: extract, calculate, report
+    python -m risk_engine batch PARENT       review many packs unattended at half price
+    python -m risk_engine web                open the local web page
     python -m risk_engine ledger             show spending to date
 """
 
@@ -345,6 +347,102 @@ def cmd_review(args, settings) -> int:
     return _report(Path(c["out_dir"]), settings, use_claude=not args.no_claude, already_spent_usd=spent)
 
 
+def cmd_batch(args, settings) -> int:
+    from risk_engine.batch import BatchError, plan_batch, read_values, submit
+
+    parent = Path(args.parent)
+    if not _folder_ok(parent):
+        return 1
+    try:
+        values = read_values(Path(args.values)) if args.values else {}
+        packs = plan_batch(parent, settings, values, args.pack)
+    except BatchError as e:
+        print(f"Problem: {e}")
+        return 1
+    print(LINE)
+    print("BATCH REVIEW (half-price, unattended)")
+    print(LINE)
+    total = 0.0
+    for p in packs:
+        value = f"value {p.base_value:,.0f}" if p.base_value else "no value given"
+        if p.problem:
+            print(f"  SKIP  {p.name}: {p.problem}")
+        else:
+            total += p.plan.estimate_usd
+            print(f"  send  {p.name}: {len(p.plan.docs)} documents, {len(p.plan.chunks)} pieces, "
+                  f"about ${p.plan.estimate_usd:.2f} ({value})")
+    ledger = Ledger(resolve_path(settings["budget"]["ledger_file"]))
+    remaining = settings["budget"]["total_budget_usd"] - ledger.total_spent_usd()
+    print(f"\nEstimated cost of the batch (finding risks, at batch prices): ${total:.2f}")
+    print("Merging, opportunity and summary steps add a little per pack, at normal prices.")
+    print(f"Budget remaining: ${remaining:.2f}")
+    if total > remaining:
+        print("\nSTOPPED: the batch could take you over your total budget. Nothing has been sent.")
+        return 1
+    if not api_key_present(settings):
+        print("\nSTOPPED: no API key found (Step 6 in README.md). Nothing has been sent.")
+        return 1
+    print("\nA batch cannot be stopped part-way through, so these checks are made before sending.")
+    if not args.yes:
+        answer = input("\nType yes and press Enter to send the batch, or just press Enter to cancel: ").strip().lower()
+        if answer not in ("yes", "y"):
+            print("Cancelled. Nothing has been sent.")
+            return 0
+    from risk_engine.pipeline import make_client
+    client = make_client(settings)
+    try:
+        job_dir = submit(packs, settings, client, parent, use_claude=not args.no_claude, merge=not args.no_merge)
+    except BatchError as e:
+        print(f"Problem: {e}")
+        return 1
+    print(f"\nBatch sent. Job folder: {job_dir}")
+    return _batch_finish(job_dir, settings, client)
+
+
+def _batch_finish(job_dir: Path, settings, client) -> int:
+    from risk_engine.batch import BatchError, collect, wait
+
+    print("Anthropic usually finishes within an hour (at most 24 hours). You can close this window:")
+    print(f'the batch keeps running, and you can pick it up later with:\n  python -m risk_engine batch-resume "{job_dir}"\n')
+    try:
+        wait(job_dir, client)
+    except KeyboardInterrupt:
+        print(f'\nStopped watching. The batch is still running. Resume with:\n  python -m risk_engine batch-resume "{job_dir}"')
+        return 0
+    except BatchError as e:
+        print(e)
+        return 1
+    print("Batch finished. Checking, calculating and writing reports...")
+    summary = collect(job_dir, settings, client)
+    print(LINE)
+    print(f"Summary of every pack (opens in Excel): {summary}")
+    print(LINE)
+    return 0
+
+
+def cmd_batch_resume(args, settings) -> int:
+    job_dir = Path(args.job_folder)
+    if not (job_dir / "job.json").exists():
+        print(f"No batch job in {job_dir}. Give the folder named in the batch command's output.")
+        return 1
+    if not api_key_present(settings):
+        print("No API key found (Step 6 in README.md).")
+        return 1
+    from risk_engine.pipeline import make_client
+    return _batch_finish(job_dir, settings, make_client(settings))
+
+
+def cmd_web(args, settings) -> int:
+    import subprocess
+
+    app = Path(__file__).resolve().parent / "webapp.py"
+    print("Opening the web page in your browser. Keep this window open while you use it;")
+    print("close it (or press Ctrl+C) to stop.")
+    return subprocess.call([sys.executable, "-m", "streamlit", "run", str(app),
+                            "--server.address", "localhost", "--browser.gatherUsageStats", "false",
+                            "--client.toolbarMode", "minimal"])
+
+
 def cmd_ledger(args, settings) -> int:
     ledger = Ledger(resolve_path(settings["budget"]["ledger_file"]))
     budget = settings["budget"]["total_budget_usd"]
@@ -416,6 +514,17 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--no-claude", action="store_true",
                     help="skip the opportunity finder and written summary (no API cost)")
 
+    b = sub.add_parser("batch", help="review every pack in a folder, unattended, at half price")
+    b.add_argument("parent", help="a folder containing one sub-folder per document pack")
+    b.add_argument("--values", help="CSV file: pack folder name, value (e.g. Pack A,2.5m)")
+    b.add_argument("--pack", help="domain pack to use (default from settings)")
+    b.add_argument("--yes", action="store_true", help="send without asking for confirmation")
+    b.add_argument("--no-merge", action="store_true", help="skip duplicate merging")
+    b.add_argument("--no-claude", action="store_true", help="skip the opportunity finder and written summary")
+    br = sub.add_parser("batch-resume", help="pick up a batch after the window was closed")
+    br.add_argument("job_folder", help="the batch job folder named when the batch was sent")
+
+    sub.add_parser("web", help="open the local web page")
     sub.add_parser("ledger", help="show spending to date")
     return p
 
@@ -426,7 +535,8 @@ def main(argv: list[str] | None = None) -> int:
         settings = load_settings(args.settings)
         return {"check": cmd_check, "ingest": cmd_ingest, "dry-run": cmd_dry_run,
                 "extract": cmd_extract, "calculate": cmd_calculate,
-                "review": cmd_review, "report": cmd_report, "ledger": cmd_ledger}[args.command](args, settings)
+                "review": cmd_review, "report": cmd_report, "batch": cmd_batch,
+                "batch-resume": cmd_batch_resume, "web": cmd_web, "ledger": cmd_ledger}[args.command](args, settings)
     except ConfigError as e:
         print(f"Setup problem: {e}")
         return 1

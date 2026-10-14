@@ -57,3 +57,31 @@ def record(**overrides):
     }
     base.update(overrides)
     return base
+
+
+class FakeBatches:
+    """Stand-in for client.messages.batches: answers each request with the
+    same answer function as FakeClaude, after a set number of status checks."""
+
+    def __init__(self, answers, polls_before_done=1):
+        self.answers = answers
+        self.submitted = []
+        self.polls_left = polls_before_done
+
+    def create(self, requests):
+        self.submitted = list(requests)
+        return SimpleNamespace(id="msgbatch_test", processing_status="in_progress")
+
+    def retrieve(self, batch_id):
+        done = self.polls_left <= 0
+        self.polls_left -= 1
+        n = len(self.submitted)
+        return SimpleNamespace(processing_status="ended" if done else "in_progress",
+                               request_counts=SimpleNamespace(succeeded=n if done else 0, errored=0, canceled=0,
+                                                              expired=0, processing=0 if done else n))
+
+    def results(self, batch_id):
+        for req in self.submitted:
+            found = re.search(r"Document: (.+)", req["params"]["messages"][0]["content"])
+            yield SimpleNamespace(custom_id=req["custom_id"], result=SimpleNamespace(
+                type="succeeded", message=self.answers(found.group(1) if found else None, req["params"])))

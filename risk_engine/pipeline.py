@@ -43,14 +43,14 @@ class Plan:
         return self.spent_to_date_usd + self.estimate_usd <= self.total_budget_usd
 
 
-def plan_extraction(folder: Path, settings: dict, pack_name: str | None = None) -> Plan:
+def plan_extraction(folder: Path, settings: dict, pack_name: str | None = None, batch: bool = False) -> Plan:
     folder = Path(folder).resolve()
     pack = load_pack(pack_name or settings["default_pack"])
     cpt = settings["estimate"]["chars_per_token"]
     docs, skipped = read_documents(folder, settings, pack)
     chunks = chunk_documents(docs, max_chars=int(settings["estimate"]["max_chunk_tokens"] * cpt))
     estimate = estimate_run([count_tokens_local(user_message(c), cpt) for c in chunks],
-                            count_tokens_local(system_prompt(pack), cpt), 0, settings)
+                            count_tokens_local(system_prompt(pack), cpt), 0, settings, batch=batch)
     extraction_usd = sum(l.cost_usd for l in estimate.lines if l.step == "Extraction")
     ledger = Ledger(resolve_path(settings["budget"]["ledger_file"]))
     return Plan(folder, pack, docs, skipped, chunks,
@@ -83,7 +83,12 @@ def run_extraction(plan: Plan, settings: dict, client=None, progress=print) -> d
         stopped = str(e)
         results = extractor.last_results
     finished = datetime.now(timezone.utc)
+    return save_extraction(plan, settings, results, run_id, out_dir, started, finished, stopped, guard.spent_usd)
 
+
+def save_extraction(plan: Plan, settings: dict, results: list, run_id: str, out_dir: Path, started, finished,
+                    stopped: str, spent_usd: float, mode: str = "extract") -> dict:
+    """Check the answers, and save the records, workbook and audit file."""
     processed = process_results(results, plan.docs, plan.pack)
     pieces = {s: sum(1 for r in results if r.status == s) for s in
               ("ok", "refused", "too_long", "unreadable", "skipped")}
@@ -98,13 +103,13 @@ def run_extraction(plan: Plan, settings: dict, client=None, progress=print) -> d
         "checklist_answered": sum(1 for c in processed["checklist"] if c["status"] == "answered"),
         "checklist_items": len(processed["checklist"]),
         "estimated_usd": round(plan.estimate_usd, 6),
-        "actual_usd": round(guard.spent_usd, 6),
+        "actual_usd": round(spent_usd, 6),
         "seconds": round((finished - started).total_seconds(), 1),
         "stopped_because": stopped,
     }
     audit = {
         "run_id": run_id,
-        "mode": "extract",
+        "mode": mode,
         "folder": str(plan.folder),
         "pack": plan.pack.name,
         "summary": summary,
