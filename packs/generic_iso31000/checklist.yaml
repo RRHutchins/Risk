@@ -1,0 +1,17 @@
+# Things the review must always report on, even if "not found in the documents".
+items:
+  - id: objectives_stated
+    question: Are the objectives clearly stated?
+    category: STR
+  - id: budget_and_timescale
+    question: What are the budget and the timescale?
+    category: FIN
+  - id: key_dependencies
+    question: What does success depend on that is outside the organisation's control?
+    category: EXT
+  - id: responsibilities
+    question: Who is responsible for delivery and for managing risk?
+    category: PEO
+  - id: limits_of_liability
+    question: Is any exposure (financial or legal) unlimited?
+    category: CMP

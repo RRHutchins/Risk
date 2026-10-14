@@ -1,0 +1,56 @@
+{
+  "_note": "Fictional worked examples showing the expected structure and level of judgement.",
+  "examples": [
+    {
+      "type": "threat", "category": "FIN", "title": "Single funding source",
+      "description": "The project relies on one grant; if it is delayed or reduced, work stops.",
+      "source_ref": "Section 3 Funding (page 2)", "quote": "The project will be funded entirely by the grant.",
+      "likelihood": 2, "likelihood_reason": "Grant decisions are usually made on time.",
+      "impact_min": 2.0, "impact_likely": 8.0, "impact_max": 20.0,
+      "impact_reason": "A delay would stop work and add standing costs.",
+      "existing_controls": "None found.", "suggested_response": "reduce", "correlation_group": "funding",
+      "confidence": "medium", "confidence_reason": "Depends on the funder's process.", "flags": []
+    },
+    {
+      "type": "threat", "category": "PEO", "title": "Key person dependency",
+      "description": "Only one named person can run the specialist system; if they leave, operations stall.",
+      "source_ref": "2 Staffing (lines 4-6)", "quote": "The system is operated by the Technical Lead.",
+      "likelihood": 3, "likelihood_reason": "Specialist staff turnover is common.",
+      "impact_min": 0.5, "impact_likely": 2.0, "impact_max": 5.0,
+      "impact_reason": "Several weeks to recruit and train a replacement.",
+      "existing_controls": "None found.", "suggested_response": "reduce", "correlation_group": "people",
+      "confidence": "high", "confidence_reason": "Stated directly.", "flags": []
+    },
+    {
+      "type": "opportunity", "category": "OPS", "title": "Shared procurement",
+      "description": "Buying jointly with a partner could lower equipment prices.",
+      "source_ref": "4 Partners (page 3)", "quote": "Partners may combine purchasing where practical.",
+      "likelihood": 3, "likelihood_reason": "Partners have done this before.",
+      "impact_min": 0.2, "impact_likely": 1.0, "impact_max": 3.0,
+      "impact_reason": "Typical volume discounts.", "existing_controls": "None needed.",
+      "suggested_response": "exploit", "correlation_group": "procurement",
+      "confidence": "medium", "confidence_reason": "Depends on timing.", "flags": []
+    },
+    {
+      "type": "threat", "category": "CMP", "title": "Unlimited indemnity",
+      "description": "The organisation gives an indemnity with no upper limit.",
+      "source_ref": "Clause 9 (page 5)", "quote": "The Organisation shall indemnify the Partner against all losses.",
+      "likelihood": 1, "likelihood_reason": "Claims are rare.",
+      "impact_min": 1.0, "impact_likely": 5.0, "impact_max": 40.0,
+      "impact_reason": "A single claim could exceed the budget.",
+      "existing_controls": "Insurance, level not stated.", "suggested_response": "share",
+      "correlation_group": "liability", "confidence": "high", "confidence_reason": "Explicit wording.",
+      "flags": ["unlimited_exposure"]
+    },
+    {
+      "type": "threat", "category": "EXT", "title": "Weather-dependent schedule",
+      "description": "Outdoor work is planned in winter; bad weather would delay it.",
+      "source_ref": "Timetable (row 12)", "quote": "Site works: November to February",
+      "likelihood": 4, "likelihood_reason": "Winter weather disruption is frequent.",
+      "impact_min": 0.2, "impact_likely": 1.0, "impact_max": 3.0,
+      "impact_reason": "Two to six weeks of delay.", "existing_controls": "None found.",
+      "suggested_response": "reduce", "correlation_group": "schedule",
+      "confidence": "medium", "confidence_reason": "Depends on the season.", "flags": []
+    }
+  ]
+}
