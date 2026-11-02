@@ -145,6 +145,13 @@ ico_registration: ZC288139
 # ---------------------------------------------------------------------
 output_folder: outputs
 
+# How long results and uploaded documents are kept. Run
+#   python -m risk_engine purge
+# to delete anything older than this. Match it to your retention policy
+# (compliance/03_retention_and_security.md).
+retention:
+  keep_days: 90
+
 # The name of the environment variable holding your Claude API key.
 # The key itself must NEVER be written in this file.
 api_key_env_var: ANTHROPIC_API_KEY

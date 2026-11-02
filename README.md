@@ -514,6 +514,20 @@ hse_review` on any command, or choose it on the web page.
 - The API key is read from an environment variable called `ANTHROPIC_API_KEY` (see
   Step 6). It is never written into any file in this project, the logs or the audit file.
 - `outputs/` and `ledger/` are excluded from GitHub, so your results stay private.
+- **Data protection.** Registered with the ICO under number ZC288139; the number is printed in
+  every report footer. Draft privacy notice, record of processing, DPIA, client processing
+  terms, breach and rights-request procedures are in the [`compliance/`](compliance/README.md)
+  folder, with a checklist of what you still need to do yourself.
+- **Delete old results.** Run results and uploaded documents contain text from the documents
+  you reviewed. Delete anything older than `retention.keep_days` (90 days by default, in
+  `config/settings.yaml`) once a month with:
+
+  ```
+  python -m risk_engine purge
+  ```
+
+  It lists the folders first and asks you to type YES. Add `--days 30` to use a different
+  period just this once.
 
 ---
 

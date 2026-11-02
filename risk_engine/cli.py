@@ -12,6 +12,7 @@
     python -m risk_engine regression         re-run the fixed regression packs and compare
     python -m risk_engine web                open the local web page
     python -m risk_engine ledger             show spending to date
+    python -m risk_engine purge              delete results older than the retention period
 """
 
 from __future__ import annotations
@@ -518,6 +519,31 @@ def cmd_ledger(args, settings) -> int:
     return 0
 
 
+def cmd_purge(args, settings) -> int:
+    from risk_engine.retention import delete_folders, find_old_folders, keep_days, output_root
+    days = args.days if args.days is not None else keep_days(settings)
+    root = output_root(settings)
+    old = find_old_folders(root, days)
+    print(LINE)
+    print(f"DELETE RESULTS OLDER THAN {days} DAYS")
+    print(LINE)
+    if not old:
+        print(f"Nothing to delete in {root}.")
+        print(LINE)
+        return 0
+    for f in old:
+        print(f"  {f.age_days:5.0f} days  {f.path.relative_to(root)}")
+    print(f"\n{len(old)} folder(s) will be permanently deleted.")
+    if not args.yes:
+        if input("Type YES to delete them: ").strip() != "YES":
+            print("Nothing deleted.")
+            return 0
+    n = delete_folders(old, root)
+    print(f"Deleted {n} folder(s).")
+    print(LINE)
+    return 0
+
+
 def _local_time(utc_text: str) -> str:
     try:
         t = datetime.strptime(utc_text, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
@@ -590,6 +616,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("web", help="open the local web page")
     sub.add_parser("ledger", help="show spending to date")
+    pg = sub.add_parser("purge", help="delete results and uploads older than the retention period")
+    pg.add_argument("--days", type=int, help="override retention.keep_days in the settings")
+    pg.add_argument("--yes", action="store_true", help="delete without asking for confirmation")
     return p
 
 
@@ -601,7 +630,8 @@ def main(argv: list[str] | None = None) -> int:
                 "extract": cmd_extract, "calculate": cmd_calculate,
                 "review": cmd_review, "report": cmd_report, "batch": cmd_batch,
                 "batch-resume": cmd_batch_resume, "test-run": cmd_test_run,
-                "regression": cmd_regression, "web": cmd_web, "ledger": cmd_ledger}[args.command](args, settings)
+                "regression": cmd_regression, "web": cmd_web, "ledger": cmd_ledger,
+                "purge": cmd_purge}[args.command](args, settings)
     except ConfigError as e:
         print(f"Setup problem: {e}")
         return 1
