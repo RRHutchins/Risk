@@ -133,6 +133,14 @@ testing:
   regression_packs: []
 
 # ---------------------------------------------------------------------
+#  Your organisation
+# ---------------------------------------------------------------------
+# UK Information Commissioner's Office (ICO) data protection registration
+# number. It is printed in the footer of every Word report and on the web
+# page. Leave it blank ("") to leave it out.
+ico_registration: ZC288139
+
+# ---------------------------------------------------------------------
 #  Where results are saved
 # ---------------------------------------------------------------------
 output_folder: outputs

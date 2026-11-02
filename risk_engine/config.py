@@ -36,3 +36,9 @@ def resolve_path(relative: str) -> Path:
 def api_key_present(settings: dict) -> bool:
     """True if the API key environment variable is set. Never returns the key."""
     return bool(os.environ.get(settings.get("api_key_env_var", "ANTHROPIC_API_KEY")))
+
+
+def footer_text(disclaimer: str, settings: dict | None) -> str:
+    """The pack's disclaimer, followed by the ICO registration number if one is set."""
+    ico = str((settings or {}).get("ico_registration") or "").strip().upper()
+    return f"{disclaimer} ICO registration {ico}." if ico else disclaimer

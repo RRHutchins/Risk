@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import streamlit as st  # noqa: E402
 
 from risk_engine.calc_pipeline import CalculationError, parse_money, run_calculation  # noqa: E402
-from risk_engine.config import api_key_present, load_settings, resolve_path  # noqa: E402
+from risk_engine.config import api_key_present, footer_text, load_settings, resolve_path  # noqa: E402
 from risk_engine.costs import Ledger, Usage, price_usage  # noqa: E402
 from risk_engine.packs import available_packs, load_pack  # noqa: E402
 from risk_engine.pipeline import plan_extraction, run_extraction  # noqa: E402
@@ -72,7 +72,7 @@ def main() -> None:
 
     pack = load_pack(pack_name)
     st.title(pack.config.get("report", {}).get("title", "Risk review"))
-    st.caption(pack.footer + " Documents are sent only to the Claude API.")
+    st.caption(footer_text(pack.footer, settings) + " Documents are sent only to the Claude API.")
 
     st.subheader("1. Choose the documents")
     files = st.file_uploader("Drag the folder of documents here (PDF, Word, Excel, text)",

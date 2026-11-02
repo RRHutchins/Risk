@@ -143,6 +143,7 @@ def test_full_report(settings):
                         "7. Method and limitations", "8. Appendix: source quotes"]
     for section in d.sections:
         assert "Not legal advice." in section.footer.paragraphs[0].text
+        assert "ICO registration ZC288139." in section.footer.paragraphs[0].text
     assert len(d.inline_shapes) == 2                       # curve and tornado charts
     register_table = next(t for t in d.tables if [c.text for c in t.rows[0].cells][4:6] == ["Rating", "Score"])
     assert register_table.rows[1].cells[4].text == "RED"

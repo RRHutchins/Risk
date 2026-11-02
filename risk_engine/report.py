@@ -141,7 +141,7 @@ def write_report(bundle: dict, pack, path: Path, work_dir: Path) -> Path:
 
     footer = section.footer.paragraphs[0]
     footer.text = ""
-    run = footer.add_run(pack.footer + "    Page ")
+    run = footer.add_run(bundle.get("footer", pack.footer) + "    Page ")
     run.italic = True
     run.font.size = Pt(8)
     run.font.color.rgb = RGBColor(0x52, 0x51, 0x4E)

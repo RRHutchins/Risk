@@ -10,7 +10,7 @@ from pathlib import Path
 
 from risk_engine import __version__
 from risk_engine.calc_pipeline import CalculationError
-from risk_engine.config import resolve_path
+from risk_engine.config import footer_text, resolve_path
 from risk_engine.costs import CostGuard, Ledger
 from risk_engine.extract import ExtractionStopped
 from risk_engine.opportunity import assess, find_opportunities
@@ -61,6 +61,7 @@ def run_report(calc_folder: Path, settings: dict, client=None, use_claude: bool 
     bundle = {
         "project_name": project,
         "pack": pack.name,
+        "footer": footer_text(pack.footer, settings),
         "extraction": extraction,
         "calculation": calculation,
         "opportunity": opp,
